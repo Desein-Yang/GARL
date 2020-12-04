@@ -10,6 +10,19 @@ from coinrun.config import Config
 from coinrun import setup_utils, wrappers
 
 import platform
+import pickle
+
+# debug function
+def save_pickle(something,name):
+    name = os.getcwd()+'/'+name
+    with open(name+'.pickle','wb+') as f:
+        pickle.dump(something,f)
+
+def load_pickle(filename):
+    name = os.getcwd()+'/'+filename 
+    with open(filename,'rb+') as f:
+        res = pickle.load(f)
+    return res
 
 def make_general_env(num_env, seed=0, use_sub_proc=True):
     from coinrun import coinrunenv
@@ -29,6 +42,7 @@ def make_general_env(num_env, seed=0, use_sub_proc=True):
 def file_to_path(filename):
     return setup_utils.file_to_path(filename)
 
+# load Config.load_path model to sess
 def load_all_params(sess):
     load_params_for_scope(sess, 'model')
 
@@ -70,10 +84,9 @@ def get_savable_params(loaded_params, scope, keep_heads=False):
             filtered_loaded.append(loaded_p)
         else:
             print('drop', p)
-            
-
     return filtered_loaded, filtered_params
 
+# load restore_id params to sess
 def restore_params(sess, loaded_params, params):
     if len(loaded_params) != len(params):
         print('param mismatch', len(loaded_params), len(params))
@@ -85,6 +98,8 @@ def restore_params(sess, loaded_params, params):
         restores.append(p.assign(loaded_p))
     sess.run(restores)
 
+# save params by joblib
+# {'args':args,'params',params}
 def save_params_in_scopes(sess, scopes, filename, base_dict=None):
     data_dict = {}
 
@@ -108,6 +123,7 @@ def save_params_in_scopes(sess, scopes, filename, base_dict=None):
     data_dict['params'] = param_dict
     joblib.dump(data_dict, save_path)
 
+# set gpu CUDA (but I have set this in script)
 def setup_mpi_gpus():
     if 'RCALL_NUM_GPU' not in os.environ:
         return
@@ -117,13 +133,16 @@ def setup_mpi_gpus():
     local_rank = len([n for n in nodes[:MPI.COMM_WORLD.Get_rank()] if n == node_id])
     os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank % num_gpus)
 
+
 def is_mpi_root():
     return MPI.COMM_WORLD.Get_rank() == 0
 
+# initialize with one parameters(rank 0 cpu)
 def tf_initialize(sess):
     sess.run(tf.initialize_all_variables())
     sync_from_root(sess)
-    
+
+# bcast rank 0 cpu paramters to other ranks    
 def sync_from_root(sess, vars=None):
     if vars is None:
         vars = tf.trainable_variables()
@@ -137,6 +156,7 @@ def sync_from_root(sess, vars=None):
             else:
                 sess.run(tf.assign(var, MPI.COMM_WORLD.bcast(None)))
 
+# get average in all cpus
 def mpi_average(values):
     return mpi_average_comm(values, MPI.COMM_WORLD)
 
@@ -150,9 +170,13 @@ def mpi_average_comm(values, comm):
 
     return buf
 
+# split comm operator into train domain and test domain to split calculate
+# usage:
+# return two float, one is aver of train domain while the other is test domain
 def mpi_average_train_test(values):
     return mpi_average_comm(values, Config.TRAIN_TEST_COMM)
     
+# if rank = 0 print
 def mpi_print(*args):
     rank = MPI.COMM_WORLD.Get_rank()
     from datetime import datetime
@@ -167,6 +191,10 @@ def mpi_print(*args):
         text = text.replace(","," ")
         print(text)
 
+# parse epinfo
+# 1. get mean reward of 100 latest episode buf
+# 2. gather all train cpu and get mean
+# 3. if sub rew exist, log sub rew
 def process_ep_buf(epinfobuf, tb_writer=None, suffix='', step=0):
     rewards = [epinfo['r'] for epinfo in epinfobuf]
     rew_mean = np.nanmean(rewards)
@@ -182,6 +210,7 @@ def process_ep_buf(epinfobuf, tb_writer=None, suffix='', step=0):
     if len(epinfobuf) > 0 and 'aux_dict' in epinfobuf[0]:
         aux_dicts = [epinfo['aux_dict'] for epinfo in epinfobuf]
 
+    # TODO:why
     if len(aux_dicts) > 0:
         keys = aux_dicts[0].keys()
 

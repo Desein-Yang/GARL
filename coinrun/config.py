@@ -8,10 +8,10 @@ class ConfigSingle(object):
     keyword arguments.
     """
     def __init__(self):
-        # 用于 file_to_path 文件
+        # logdir
         self.WORKDIR = './logs'
         self.LOGDIR = self.WORKDIR + '/test/'
-        # 用于存储 tensorflow board 文件
+        # � tensorflow board
         self.TB_DIR = self.WORKDIR + '/test/tb/'
         if not os.path.exists(self.LOGDIR):
             os.makedirs(self.LOGDIR, exist_ok=True)
@@ -24,6 +24,7 @@ class ConfigSingle(object):
         arg_keys = []
         bool_keys = []
         type_keys = []
+        random_keys = []
 
         # Name sparename type defaylt
         # The runid, used to determine the name for save files.
@@ -102,6 +103,8 @@ class ConfigSingle(object):
         # Overwrite the latest save file after this many updates
         type_keys.append(('si', 'save_interval', int, 10))
 
+        type_keys.append(('li', 'log_interval', int, 100))
+
         # The number of evaluation environments to use
         type_keys.append(('num-eval', 'num_eval', int, 20, True))
 
@@ -124,6 +127,15 @@ class ConfigSingle(object):
         # Use high resolution images for rendering
         bool_keys.append(('hres', 'is_high_res'))
 
+        # network randomization 
+        random_keys.append(('train_flag', 'train_flag', int, 0))
+        random_keys.append(('fm_coeff', 'fm_coeff', float, 0.002))
+        random_keys.append(('real_thres', 'real_thres', float, 0.9))
+
+        random_keys.append(('ui', 'use_inversion', int, 0))
+        random_keys.append(('uct', 'use_color_transform', int, 0))
+
+
         # RES_KEY restore rest setting keys(when type key >5,bool key >3)
         self.RES_KEYS = []
 
@@ -142,19 +154,19 @@ class ConfigSingle(object):
         self.arg_keys = arg_keys
         self.bool_keys = bool_keys
         self.type_keys = type_keys
-
+        self.random_keys = random_keys
         self.load_data = {}
         self.args_dict = {}
 
-    def is_test_rank(self):
+    def is_test_rank(self,frac=4):
         if self.TEST:
             rank = MPI.COMM_WORLD.Get_rank()
-            return rank % 2 == 1
+            return rank % frac == 1
 
         return False
 
     def get_test_frac(self):
-        return .5 if self.TEST else 0
+        return .25 if self.TEST else 0
 
     def get_load_data(self, load_key='default'):
         if not load_key in self.load_data:
@@ -279,13 +291,19 @@ class ConfigSingle(object):
             bk_kwargs = {bk[1]: default_args[bk[1]]}
             parser.set_defaults(**bk_kwargs)
 
+        for rk in self.random_keys:
+            parser.add_argument('-' + rk[0], '--' + self.deprocess_field(rk[1]), type=rk[2], default=rk[3])
+
         # use command args over defaults
         if use_cmd_line_args:
             args = parser.parse_args()
         else:
             args = parser.parse_args(args=[])
         
-        self.WORKDIR = self.WORKDIR +'/'+ str(args.run_id)
+        if args.restore_id is not None:
+            self.WORKDIR = self.WORKDIR + '/' + str(args.restore_id) 
+        else:
+            self.WORKDIR = self.WORKDIR +'/'+ str(args.run_id)
         self.LOGDIR = self.WORKDIR + '/'
         self.TB_DIR = self.WORKDIR + '/tb/'
         if not os.path.exists(self.WORKDIR):

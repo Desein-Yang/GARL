@@ -6,14 +6,13 @@ import time
 import joblib
 import numpy as np
 import tensorflow as tf
-import wandb 
 from collections import deque
+
 from mpi4py import MPI
 
 from coinrun.tb_utils import TB_Writer
 import coinrun.main_utils as utils
-import coinrun.setup_utils
-import pickle
+
 from coinrun.config import Config
 
 mpi_print = utils.mpi_print
@@ -48,7 +47,7 @@ class MpiAdamOptimizer(tf.train.AdamOptimizer):
             np.divide(buf, float(num_tasks) * self.train_frac, out=buf)
             return buf
 
-        avg_flat_grad = tf.compat.v1.py_func(_collect_grads, [flat_grad], tf.float32)
+        avg_flat_grad = tf.py_func(_collect_grads, [flat_grad], tf.float32)
         avg_flat_grad.set_shape(flat_grad.shape)
         avg_grads = tf.split(avg_flat_grad, sizes, axis=0)
         avg_grads_and_vars = [(tf.reshape(g, v.shape), v)
@@ -88,6 +87,25 @@ class Model(object):
         approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - OLDNEGLOGPAC))
         clipfrac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(ratio - 1.0), CLIPRANGE)))
 
+        # clean training
+        clean_neglogpac = train_model.clean_pd.neglogp(A)
+        clean_entropy = tf.reduce_mean(train_model.clean_pd.entropy())
+        
+        clean_vpred = train_model.clean_vf
+        clean_vpredclipped = OLDVPRED + tf.clip_by_value(train_model.clean_vf - OLDVPRED, - CLIPRANGE, CLIPRANGE)
+        clean_vf_losses1 = tf.square(clean_vpred - R)
+        clean_vf_losses2 = tf.square(clean_vpredclipped - R)
+        clean_vf_loss = .5 * tf.reduce_mean(tf.maximum(clean_vf_losses1, clean_vf_losses2))
+        clean_ratio = tf.exp(OLDNEGLOGPAC - clean_neglogpac)
+        clean_pg_losses = -ADV * clean_ratio
+        clean_pg_losses2 = -ADV * tf.clip_by_value(clean_ratio, 1.0 - CLIPRANGE, 1.0 + CLIPRANGE)
+        clean_pg_loss = tf.reduce_mean(tf.maximum(clean_pg_losses, clean_pg_losses2))
+        clean_approxkl = .5 * tf.reduce_mean(tf.square(clean_neglogpac - OLDNEGLOGPAC))
+        clean_clipfrac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(clean_ratio - 1.0), CLIPRANGE)))
+        
+        # FM loss
+        fm_loss = tf.losses.mean_squared_error(labels=tf.stop_gradient(train_model.CH), predictions=train_model.H)
+        
         params = tf.trainable_variables()
         weight_params = [v for v in params if '/b' not in v.name]
 
@@ -103,7 +121,8 @@ class Model(object):
 
         l2_loss = tf.reduce_sum([tf.nn.l2_loss(v) for v in weight_params])
 
-        loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef + l2_loss * Config.L2_WEIGHT
+        loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef + l2_loss * Config.L2_WEIGHT + fm_loss * Config.FM_COEFF
+        clean_loss = clean_pg_loss - clean_entropy * ent_coef + clean_vf_loss * vf_coef + l2_loss * Config.L2_WEIGHT + fm_loss * Config.FM_COEFF
 
         if Config.SYNC_FROM_ROOT:
             trainer = MpiAdamOptimizer(MPI.COMM_WORLD, learning_rate=LR, epsilon=1e-5)
@@ -111,13 +130,20 @@ class Model(object):
             trainer = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
 
         grads_and_var = trainer.compute_gradients(loss, params)
+        clean_grads_and_var = trainer.compute_gradients(clean_loss, params)
 
         grads, var = zip(*grads_and_var)
         if max_grad_norm is not None:
             grads, _grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
         grads_and_var = list(zip(grads, var))
-
+        
+        clean_grads, clean_var = zip(*clean_grads_and_var)
+        if max_grad_norm is not None:
+            clean_grads, _grad_norm = tf.clip_by_global_norm(clean_grads, max_grad_norm)
+        clean_grads_and_var = list(zip(clean_grads, clean_var))
+        
         _train = trainer.apply_gradients(grads_and_var)
+        _clean_train = trainer.apply_gradients(clean_grads_and_var)
 
         def train(lr, cliprange, obs, returns, masks, actions, values, neglogpacs, states=None):
             advs = returns - values
@@ -135,6 +161,23 @@ class Model(object):
                 [pg_loss, vf_loss, entropy, approxkl, clipfrac, l2_loss, _train],
                 td_map
             )[:-1]
+        
+        def clean_train(lr, cliprange, obs, returns, masks, actions, values, neglogpacs, states=None):
+            advs = returns - values
+
+            adv_mean = np.mean(advs, axis=0, keepdims=True)
+            adv_std = np.std(advs, axis=0, keepdims=True)
+            advs = (advs - adv_mean) / (adv_std + 1e-8)
+            td_map = {train_model.X:obs, A:actions, ADV:advs, R:returns, LR:lr,
+                    CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
+            if states is not None:
+                td_map[train_model.S] = states
+                td_map[train_model.M] = masks
+            return sess.run(
+                [clean_pg_loss, clean_vf_loss, clean_entropy, clean_approxkl, clean_clipfrac, l2_loss, _clean_train],
+                td_map
+            )[:-1]
+        
         self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'l2_loss']
 
         def save(save_path):
@@ -152,10 +195,12 @@ class Model(object):
         self.train_model = train_model
         self.act_model = act_model
         self.step = act_model.step
-        self.value = act_model.value
+        self.value = act_model.value_with_clean
         self.initial_state = act_model.initial_state
         self.save = save
         self.load = load
+        self.clean_train = clean_train
+        self.step_with_clean = act_model.step_with_clean
 
         if Config.SYNC_FROM_ROOT:
             if MPI.COMM_WORLD.Get_rank() == 0:
@@ -172,7 +217,7 @@ class Runner(AbstractEnvRunner):
         self.lam = lam
         self.gamma = gamma
 
-    def run(self):
+    def run(self, clean_flag):
         # Here, we init the lists that will contain the mb of experiences
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [],[],[],[],[],[]
         mb_states = self.states
@@ -181,7 +226,9 @@ class Runner(AbstractEnvRunner):
         for _ in range(self.nsteps):
             # Given observations, get action value and neglopacs
             # We already have self.obs because Runner superclass run self.obs[:] = env.reset() on init
-            actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
+            actions, values, self.states, neglogpacs \
+            = self.model.step_with_clean(clean_flag, self.obs, self.states, self.dones)
+            
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)
@@ -202,7 +249,7 @@ class Runner(AbstractEnvRunner):
         mb_values = np.asarray(mb_values, dtype=np.float32)
         mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
-        last_values = self.model.value(self.obs, self.states, self.dones)
+        last_values = self.model.value(clean_flag, self.obs, self.states, self.dones)
 
         # discount/bootstrap off value fn
         mb_returns = np.zeros_like(mb_rewards)
@@ -236,58 +283,43 @@ def constfn(val):
     return f
 
 
-
 def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
-            log_interval=100, nminibatches=4, noptepochs=4, cliprange=0.2,
-            save_interval=10, large_bufsize=100,load_path=None):
-    """train ppo agent"""
+            log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
+            save_interval=0, load_path=None):
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     mpi_size = comm.Get_size()
 
     sess = tf.get_default_session()
     tb_writer = TB_Writer(sess)
-    
-    if isinstance(lr, float): 
-        lr = constfn(lr)
-    else: 
-        assert callable(lr)
-    if isinstance(cliprange, float): 
-        cliprange = constfn(cliprange)
-    else: 
-        assert callable(cliprange)
+
+    if isinstance(lr, float): lr = constfn(lr)
+    else: assert callable(lr)
+    if isinstance(cliprange, float): cliprange = constfn(cliprange)
+    else: assert callable(cliprange)
     total_timesteps = int(total_timesteps)
 
     nenvs = env.num_envs
     ob_space = env.observation_space
     ac_space = env.action_space
-    
-    # each update simulate nsteps
-    # each update of a bacth simulate nbatch steps
-    # each model input only nbatch_train
     nbatch = nenvs * nsteps
+    
     nbatch_train = nbatch // nminibatches
 
-    # 加载policy
-    model = Model(policy=policy, ob_space=ob_space, ac_space=ac_space, 
-                  nbatch_act=nenvs, nbatch_train=nbatch_train,
-                  nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
-                  max_grad_norm=max_grad_norm)
-    
-    # if load_path is not none will load params
+    model = Model(policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=nenvs, nbatch_train=nbatch_train,
+                    nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
+                    max_grad_norm=max_grad_norm)
+
     utils.load_all_params(sess)
 
-    # run rollout in env
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
 
-    # episodes buffer to store reward of latest epinfo
     epinfobuf10 = deque(maxlen=10)
-    epinfobuf100 = deque(maxlen=large_bufsize)
+    epinfobuf100 = deque(maxlen=100)
     tfirststart = time.time()
     active_ep_buf = epinfobuf100
 
-    # total update times
     nupdates = total_timesteps//nbatch
     mean_rewards = []
     datapoints = []
@@ -296,47 +328,43 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     train_t_total = 0
 
     can_save = True
-    checkpoints = [ 8*i for i in range(1,32)]
+    checkpoints = list(range(0,2049,10))
     saved_key_checkpoints = [False] * len(checkpoints)
+    init_rand = tf.variables_initializer([v for v in tf.global_variables() if 'randcnn' in v.name])
 
-    # not rank = 0 don't need save
     if Config.SYNC_FROM_ROOT and rank != 0:
         can_save = False
 
-    # save model params with base_name and mean reward(10)
     def save_model(base_name=None):
         base_dict = {'datapoints': datapoints}
-        # sess, scopes, filename, base_dict=None
         utils.save_params_in_scopes(sess, ['model'], Config.get_save_file(base_name=base_name), base_dict)
 
     for update in range(1, nupdates+1):
-        # n batch ，每个 batch 每次训练 monibatch
         assert nbatch % nminibatches == 0
         nbatch_train = nbatch // nminibatches
         tstart = time.time()
-     
-        # learning rate decay
         frac = 1.0 - (update - 1.0) / nupdates
         lrnow = lr(frac)
         cliprangenow = cliprange(frac)
 
-        #mpi_print('collecting rollouts...')
+        mpi_print('collecting rollouts...')
         run_tstart = time.time()
-
-        # rollout
-        obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run()
+        sess.run(init_rand) # re-initialize the parameters of random networks
+        clean_flag = np.random.rand(1)[0] > Config.REAL_THRES
+        
+        obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run(clean_flag)
         epinfobuf10.extend(epinfos)
         epinfobuf100.extend(epinfos)
 
         run_elapsed = time.time() - run_tstart
         run_t_total += run_elapsed
-        #mpi_print('rollouts complete')
+        mpi_print('rollouts complete')
 
         mblossvals = []
 
-        #mpi_print('updating parameters...')
+        mpi_print('updating parameters...')
         train_tstart = time.time()
-
+        
         if states is None: # nonrecurrent version
             inds = np.arange(nbatch)
             for _ in range(noptepochs):
@@ -345,10 +373,14 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                     end = start + nbatch_train
                     mbinds = inds[start:end]
                     slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
-                    mblossvals.append(model.train(lrnow, cliprangenow, *slices))
+                    
+                    if clean_flag:
+                        mblossvals.append(model.clean_train(lrnow, cliprangenow, *slices))
+                    else:
+                        mblossvals.append(model.train(lrnow, cliprangenow, *slices))
+                        
         else: # recurrent version
             assert nenvs % nminibatches == 0
-
             envinds = np.arange(nenvs)
             flatinds = np.arange(nenvs * nsteps).reshape(nenvs, nsteps)
             envsperbatch = nbatch_train // nsteps
@@ -367,70 +399,40 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         train_elapsed = time.time() - train_tstart
         train_t_total += train_elapsed
-        #mpi_print('update complete')
+        mpi_print('update complete')
 
         lossvals = np.mean(mblossvals, axis=0)
         tnow = time.time()
         fps = int(nbatch / (tnow - tstart))
 
-        # log mpiprint and wandb 
         if update % log_interval == 0 or update == 1:
-            # step elapsed (each length is fixed in PPO)
             step = update*nbatch
-            rew_mean_100 = utils.process_ep_buf(active_ep_buf, tb_writer=tb_writer, suffix='', step=step)
-            success_rate_train = np.sum(np.array([epinfo['r'] for epinfo in active_ep_buf])==10) / large_bufsize
-            ep_len_mean_100 = np.nanmean([epinfo['l'] for epinfo in active_ep_buf])
+            rew_mean_10 = utils.process_ep_buf(active_ep_buf, tb_writer=tb_writer, suffix='', step=step)
+            ep_len_mean = np.nanmean([epinfo['l'] for epinfo in active_ep_buf])
             
-            mpi_print('\n-----', update, '-----')
+            mpi_print('\n----', update)
 
-            mean_rewards.append(rew_mean_100)
-            datapoints.append([step, rew_mean_100])
-            
-            wandb.tensorflow.log(tf.summary.merge_all())
-            wandb.log({
-                'Time_elapsed':tnow - tfirststart,
-                'Step_elapsed':step,
-                'Eplen_mean':ep_len_mean_100,
-                'Succ_rate':success_rate_train,
-                'Rew_mean':rew_mean_100,
-                'fps':fps
-            })
-            best_rew_mean, best_succ_rate = 0,0
-            if best_rew_mean < rew_mean_100:
-                wandb.run.summary["best_rew_mean"] = rew_mean_100
-                wandb.run.summary["best_succ_rate"] = success_rate_train
-                best_rew_mean = rew_mean_100
-                best_succ_rate= success_rate_train
-            #data = [[x, y] for (x, y) in zip(x_values, y_values)]
-            #table = wandb.Table(data=data, columns = ["frames", "rewards_train"])
-            #wandb.plot.line()
-            tb_writer.log_scalar(ep_len_mean_100, 'ep_len_mean')
+            mean_rewards.append(rew_mean_10)
+            datapoints.append([step, rew_mean_10])
+
+            tb_writer.log_scalar(ep_len_mean, 'ep_len_mean')
             tb_writer.log_scalar(fps, 'fps')
 
-            mpi_print('time_elapsed'.ljust(25), tnow - tfirststart)
-            mpi_print('time_run'.ljust(25), run_t_total)
-            mpi_print('time_train'.ljust(25), train_t_total)
-            mpi_print('epi_len / total_timesteps'.ljust(25), update*nsteps, total_timesteps)
+            mpi_print('time_elapsed', tnow - tfirststart, run_t_total, train_t_total)
+            mpi_print('timesteps', update*nsteps, total_timesteps)
 
-            mpi_print('epi mean len'.ljust(25), ep_len_mean_100)
-            mpi_print('epi mean rew'.ljust(25), rew_mean_100)
-            mpi_print('succ rate'.ljust(25), success_rate_train)
-
+            mpi_print('eplenmean', ep_len_mean)
+            mpi_print('eprew', rew_mean_10)
             mpi_print('fps', fps)
-            mpi_print('now_timesteps', step)
-            # lastest 10 episode info
-            if len(epinfobuf10) >= 0:
-                mpi_print('epi_info',[epinfo['r'] for epinfo in epinfobuf10])
-           
-            # policy loss,entropy loss,clip loss,value loss
+            mpi_print('total_timesteps', update*nbatch)
+            mpi_print([epinfo['r'] for epinfo in epinfobuf10])
+
             if len(mblossvals):
                 for (lossval, lossname) in zip(lossvals, model.loss_names):
                     mpi_print(lossname, lossval)
-                    wandb.log({lossname:lossval})
                     tb_writer.log_scalar(lossval, lossname)
-            mpi_print('-----------\n')
-    
-        # save models every si updates on rank 0 cpu as 'checkpointM'
+            mpi_print('----\n')
+
         if can_save:
             if save_interval and (update % save_interval == 0):
                 save_model()
@@ -439,9 +441,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                 if (not saved_key_checkpoints[j]) and (step >= (checkpoint * 1e6)):
                     saved_key_checkpoints[j] = True
                     save_model(str(checkpoint) + 'M')
-            
-            #if Config.is_test_rank(): 
-            #    epinfo1000 = test(sess,load_path=str(checkpoint)+'M')
+
     save_model()
 
     env.close()

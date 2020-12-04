@@ -1,17 +1,26 @@
 """
 Load an agent trained with train_agent.py and 
 """
-
+import joblib
 import time
-
 import tensorflow as tf
+import wandb
 import numpy as np
 from coinrun import setup_utils
 import coinrun.main_utils as utils
 from coinrun.config import Config
 from coinrun import policies, wrappers
+from coinrun.ppo2 import Model
 
 mpi_print = utils.mpi_print
+
+def load_model(sess,load_path):
+    loaded_params = joblib.load(load_path)['params']
+    restores = []
+    for p, loaded_p in zip(params, loaded_params):
+        restores.append(p.assign(loaded_p))
+    sess.run(restores)
+
 
 def create_act_model(sess, env, nenvs):
     ob_space = env.observation_space
@@ -22,11 +31,9 @@ def create_act_model(sess, env, nenvs):
 
     return act
 
-def enjoy_env_sess(sess):
-    should_render = True
+def test(sess,load_path,should_render=False,rep_count=Config.REP):
+    rank = MPI
     should_eval = Config.TRAIN_EVAL or Config.TEST_EVAL
-    rep_count = Config.REP
-
     if should_eval:
         env = utils.make_general_env(Config.NUM_EVAL)
         should_render = False
@@ -40,6 +47,8 @@ def enjoy_env_sess(sess):
 
     nenvs = env.num_envs
 
+    model = load_model(sess,filename)
+    
     agent = create_act_model(sess, env, nenvs)
 
     sess.run(tf.global_variables_initializer())
@@ -124,6 +133,11 @@ def enjoy_env_sess(sess):
 
         mpi_mean_score = utils.mpi_average([mean_score])
         mpi_print('mpi_mean', mpi_mean_score)
+        wandb.log({
+            'test_score':score / rep_count,
+            'test_mean_score':mean_score,
+            'mpi_mean_score':mpi_mean_score
+        })
 
         result = mean_score
 
@@ -131,8 +145,7 @@ def enjoy_env_sess(sess):
 
 def main():
     utils.setup_mpi_gpus()
-    setup_utils.load_for_setup_if_neccessnary()
-    #setup_utils.setup_and_load()
+    setup_utils.setup_and_load()
     with tf.Session() as sess:
         enjoy_env_sess(sess)
 

@@ -1,0 +1,18 @@
+make: Entering directory '/home/coinrun/coinrun'
+make: Nothing to be done for 'all'.
+make: Leaving directory '/home/coinrun/coinrun'
+Logging to /tmp/openai-2020-12-03-15-30-45-625017
+Loading saved file for scope model
+restoring <tf.Variable 'model/c1/w:0' shape=(8, 8, 3, 32) dtype=float32_ref>
+restoring <tf.Variable 'model/c1/b:0' shape=(1, 32, 1, 1) dtype=float32_ref>
+restoring <tf.Variable 'model/c2/w:0' shape=(4, 4, 32, 64) dtype=float32_ref>
+restoring <tf.Variable 'model/c2/b:0' shape=(1, 64, 1, 1) dtype=float32_ref>
+restoring <tf.Variable 'model/c3/w:0' shape=(3, 3, 64, 64) dtype=float32_ref>
+restoring <tf.Variable 'model/c3/b:0' shape=(1, 64, 1, 1) dtype=float32_ref>
+restoring <tf.Variable 'model/fc1/w:0' shape=(1024, 512) dtype=float32_ref>
+restoring <tf.Variable 'model/fc1/b:0' shape=(512,) dtype=float32_ref>
+restoring <tf.Variable 'model/v/w:0' shape=(512, 1) dtype=float32_ref>
+restoring <tf.Variable 'model/v/b:0' shape=(1,) dtype=float32_ref>
+restoring <tf.Variable 'model/pi/w:0' shape=(512, 7) dtype=float32_ref>
+restoring <tf.Variable 'model/pi/b:0' shape=(7,) dtype=float32_ref>
+CoinRun ignores resets

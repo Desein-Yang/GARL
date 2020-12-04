@@ -1,4 +1,5 @@
 import tensorflow as tf
+import wandb
 from mpi4py import MPI
 from coinrun.config import Config
 import numpy as np
@@ -47,8 +48,8 @@ class TB_Writer(object):
 
         def make_scalar_graph(name):
             scalar_ph = tf.placeholder(name='scalar_' + name, dtype=tf.float32)
-            scalar_summary = tf.summary.scalar(name, scalar_ph)
-            merged = tf.summary.merge([scalar_summary])
+            scalar_summary = tf.compat.v1.summary.scalar(name, scalar_ph)
+            merged = tf.compat.v1.summary.merge([scalar_summary])
             tuples.append((scalar_ph, merged))
 
         name_dict = {}
