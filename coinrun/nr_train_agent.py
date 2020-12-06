@@ -7,7 +7,8 @@ from mpi4py import MPI
 import tensorflow as tf
 from baselines.common import set_global_seeds
 import coinrun.main_utils as utils
-from coinrun import setup_utils, policies, wrappers, random_ppo2
+from coinrun import setup_utils,  wrappers
+from coinrun import nr_ppo2, nr_policies
 from coinrun.config import Config
 
 def main():
@@ -15,7 +16,18 @@ def main():
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
+    size = comm.Get_size()
+    print('size',size)
 
+    # For wandb package to visualize results curves
+    config = Config.get_args_dict()
+    wandb.init(
+        project="coinrun",
+        notes="network randomization",
+        tags=["baseline"],
+        config=config
+    )
+  
     seed = int(time.time()) % 10000
     set_global_seeds(seed * 100 + rank)
 
@@ -26,18 +38,17 @@ def main():
 
     nenvs = Config.NUM_ENVS
     total_timesteps = int(256e6)
-    save_interval = args.save_interval
 
     env = utils.make_general_env(nenvs, seed=rank)
 
     with tf.Session(config=config):
         env = wrappers.add_final_wrappers(env)
         
-        policy = policies.get_policy()
+        policy = nr_policies.get_policy()
 
-        random_ppo2.learn(policy=policy,
+        nr_ppo2.learn(policy=policy,
                           env=env,
-                          save_interval=save_interval,
+                          save_interval=args.save_interval,
                           nsteps=Config.NUM_STEPS,
                           nminibatches=Config.NUM_MINIBATCHES,
                           lam=0.95,

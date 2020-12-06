@@ -7,8 +7,15 @@ import tensorflow as tf
 import wandb
 from baselines.common import set_global_seeds
 import coinrun.main_utils as utils
-from coinrun import setup_utils, policies, wrappers, ppo2
+from coinrun import setup_utils, policies_back, wrappers, ppo2, ppo2_nr
 from coinrun.config import Config
+
+def learn_func(**kwargs):
+    if Config.USE_LSTM == 2:
+        f = ppo2_nr.learn(**kwargs)
+    else:
+        f = ppo2.learn(**kwargs)
+    return f
 
 def main():
     args = setup_utils.setup_and_load()
@@ -49,10 +56,11 @@ def main():
     with tf.Session(config=config):
         env = wrappers.add_final_wrappers(env)
         
-        policy = policies.get_policy()
+        policy = policies_back.get_policy()
+        #policy = policies.get_policy()
         utils.mpi_print('Set up policy')
-
-        ppo2.learn(policy=policy,
+            
+        learn_func(policy=policy,
                     env=env,
                     save_interval=args.save_interval,
                     nsteps=Config.NUM_STEPS,

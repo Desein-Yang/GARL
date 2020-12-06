@@ -127,11 +127,12 @@ class ConfigSingle(object):
         # Use high resolution images for rendering
         bool_keys.append(('hres', 'is_high_res'))
 
-        # network randomization 
-        random_keys.append(('train_flag', 'train_flag', int, 0))
-        random_keys.append(('fm_coeff', 'fm_coeff', float, 0.002))
-        random_keys.append(('real_thres', 'real_thres', float, 0.9))
-
+        # network randomization
+        random_keys.append(('train-flag', 'train_flag', int, 0))
+        random_keys.append(('fm-coeff', 'fm_coeff', float, 0.002))
+        random_keys.append(('real-thres', 'real_thres', float, 0.9))
+        
+        # network randomization baselines
         random_keys.append(('ui', 'use_inversion', int, 0))
         random_keys.append(('uct', 'use_color_transform', int, 0))
 
