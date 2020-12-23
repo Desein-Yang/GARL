@@ -65,6 +65,10 @@ class ConfigSingle(object):
         type_keys.append(('ent', 'entropy_coeff', float, .01))
         type_keys.append(('lr', 'learning_rate', float, 5e-4))
         type_keys.append(('gamma', 'gamma', float, 0.999))
+        type_keys.append(('gl', 'gae_lambda', float, 0.95))
+        type_keys.append(('vf', 'vf_coeff', float, 0.5))
+        type_keys.append(('mgn', 'max_grad_norm', float, 0.5))
+        type_keys.append(('clp', 'clip_range', float, 0.2))
 
         # Should the agent's velocity be painted in the upper left corner of observations.
         # 1/0 means True/False
@@ -130,7 +134,7 @@ class ConfigSingle(object):
         # network randomization
         random_keys.append(('train-flag', 'train_flag', int, 0))
         random_keys.append(('fm-coeff', 'fm_coeff', float, 0.002))
-        random_keys.append(('real-thres', 'real_thres', float, 0.9))
+        random_keys.append(('skip-prob', 'skip_prob', float, 0.1))
         
         # network randomization baselines
         random_keys.append(('ui', 'use_inversion', int, 0))
@@ -197,7 +201,8 @@ class ConfigSingle(object):
 
             if isinstance(val, str):
                 val = self.process_field(val)
-
+            
+            # set Config.ATTR = value in args dict
             setattr(self, ak.upper(), val)
 
         self.compute_args_dependencies()
@@ -238,9 +243,7 @@ class ConfigSingle(object):
     def get_save_file_for_rank(self, rank, runid=None, base_name=None):
         if runid is None:
             runid = self.RUN_ID
-
         extra = ''
-
         if base_name is not None:
             extra = '_' + base_name
 
@@ -261,6 +264,8 @@ class ConfigSingle(object):
 
         return arg_strs
 
+    # avoid directly use args_dict and modify config 
+    # safe 
     def get_args_dict(self):
         _args_dict = {}
         _args_dict.update(self.args_dict)
@@ -271,14 +276,13 @@ class ConfigSingle(object):
         """initialize command line args into config"""
         default_args = {}
 
-        # 处理输入中的-_混用，加入default_args
         for tk in self.type_keys:
             default_args[self.process_field(tk[1])] = tk[3]
 
         for bk in self.bool_keys:
             default_args[bk[1]] = False
 
-        # TODO:what's update
+        # update mean add key and renew value in (second dict) into the first dict
         default_args.update(kwargs)
 
         parser = argparse.ArgumentParser()

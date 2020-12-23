@@ -346,11 +346,12 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         lrnow = lr(frac)
         cliprangenow = cliprange(frac)
 
-        mpi_print('collecting rollouts...')
+        #mpi_print('collecting rollouts...')
         run_tstart = time.time()
         sess.run(init_rand) # re-initialize the parameters of random networks
         # random network weight clean
-        clean_flag = np.random.rand(1)[0] > Config.REAL_THRES
+        # 1 - probability to use clean picture
+        clean_flag = np.random.rand(1)[0] > 1 - Config.SKIP_PROB
         
         obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run(clean_flag)
         epinfobuf10.extend(epinfos)

@@ -56,6 +56,8 @@ if DEBUG:
 else:
     lib_path = '.build-release/coinrun_cpp'
 
+# 使用 ctype 访问 C 代码
+# https://python3-cookbook.readthedocs.io/zh_CN/latest/c15/p01_access_ccode_using_ctypes.html
 lib = npct.load_library(lib_path, os.path.dirname(__file__))
 lib.init.argtypes = [c_int]
 lib.get_NUM_ACTIONS.restype = c_int
@@ -64,7 +66,7 @@ lib.get_RES_H.restype = c_int
 lib.get_VIDEORES.restype = c_int
 
 lib.vec_create.argtypes = [
-    c_int,    # game_type
+   c_int,    # game_type
     c_int,    # nenvs
     c_int,    # lump_n
     c_bool,   # want_hires_render

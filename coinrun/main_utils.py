@@ -42,6 +42,29 @@ def make_general_env(num_env, seed=0, use_sub_proc=True):
 def file_to_path(filename):
     return setup_utils.file_to_path(filename)
 
+# load name is specified by config.RESTORE_ID adn return True/False
+# parameters are store in ./logs/runid/sav_runid_0
+# parameters are loaded into Config.load_data
+# Dict : Config.load_data['default'] 
+# Dict : Config.load_data['default'] = {
+#           'args':{keys:value}; // all args dict of config
+#           'datapoints':[[steps,score]...]; //all train history(rew_mean)
+#           'params': {model:params_list}: // parameters dict
+# List : Config.load_data['default']['params']['model'] // list of ndarray
+# }
+
+def load_args(load_key='default'):
+    """get train args of retore id"""
+    load_data = Config.get_load_data(load_key)
+    if load_data is None:
+        return False
+    
+    args_dict = load_data['args']
+
+    #Config.parse_args_dict(args_dict)
+
+    return args_dict
+
 # load Config.load_path model to sess
 def load_all_params(sess):
     load_params_for_scope(sess, 'model')
@@ -52,14 +75,10 @@ def load_params_for_scope(sess, scope, load_key='default'):
         return False
 
     params_dict = load_data['params']
-
     if scope in params_dict:
         print('Loading saved file for scope', scope)
-
         loaded_params = params_dict[scope]
-
         loaded_params, params = get_savable_params(loaded_params, scope, keep_heads=True)
-
         restore_params(sess, loaded_params, params)
     
     return True
@@ -185,7 +204,7 @@ def mpi_print(*args):
     if rank == 0:
         text = str(datetime.now())[:-7].ljust(23)
         for arg in args:
-            text += str(args)
+            text += str(arg)
         for s in kuohao:
             text = text.replace(s,"")
         text = text.replace(","," ")

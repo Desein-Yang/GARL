@@ -195,6 +195,8 @@ class Runner(AbstractEnvRunner):
                 maybeepinfo = info.get('episode')
                 if maybeepinfo: epinfos.append(maybeepinfo)
             mb_rewards.append(rewards)
+        
+
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
@@ -307,10 +309,12 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     def save_model(base_name=None):
         base_dict = {'datapoints': datapoints}
         # sess, scopes, filename, base_dict=None
-        utils.save_params_in_scopes(sess, ['model'], Config.get_save_file(base_name=base_name), base_dict)
+        utils.save_params_in_scopes(sess, ['model'], 
+                                    Config.get_save_file(base_name=base_name), 
+                                    base_dict)
 
     for update in range(1, nupdates+1):
-        # n batch ，每个 batch 每次训练 monibatch
+        # n batch 
         assert nbatch % nminibatches == 0
         nbatch_train = nbatch // nminibatches
         tstart = time.time()

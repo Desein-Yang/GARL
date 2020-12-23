@@ -30,8 +30,8 @@ def main():
     config = Config.get_args_dict()
     wandb.init(
         project="coinrun",
-        notes="l2 baseline",
-        tags=["baseline"],
+        notes=" baseline train",
+        tags=["baseline",Config.RUN_ID.split('-')[0]],
         config=config
     )
     
@@ -62,16 +62,18 @@ def main():
             
         learn_func(policy=policy,
                     env=env,
+                    log_interval=args.log_interval,
                     save_interval=args.save_interval,
                     nsteps=Config.NUM_STEPS,
                     nminibatches=Config.NUM_MINIBATCHES,
-                    lam=0.95,
+                    lam=Config.GAE_LAMBDA,
                     gamma=Config.GAMMA,
                     noptepochs=Config.PPO_EPOCHS,
-                    log_interval=args.log_interval,
                     ent_coef=Config.ENTROPY_COEFF,
+                    vf_coef=Config.VF_COEFF,
+                    max_grad_norm=Config.MAX_GRAD_NORM,
                     lr=lambda f : f * Config.LEARNING_RATE,
-                    cliprange=lambda f : f * 0.2,
+                    cliprange=lambda f : f * Config.CLIP_RANGE,
                     total_timesteps=total_timesteps)
 
 if __name__ == '__main__':
