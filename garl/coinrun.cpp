@@ -1822,6 +1822,9 @@ int get_RES_W()  { return RES_W; }
 int get_RES_H()  { return RES_H; }
 int get_VIDEORES()  { return VIDEORES; }
 
+int get_LEVEL_SEED() { return LEVEL_SEED; }
+
+
 void initialize_args(int *int_args) {
   USE_HIGH_DIF = int_args[0] == 1;
   NUM_LEVELS = int_args[1];

@@ -96,7 +96,6 @@ already_inited = False
 
 def init_args_and_threads(cpu_count=4,
                           monitor_csv_policy='all',
-                          level_seed=None,
 			  rand_seed=None):
     """
     Perform one-time global init for the CoinRun library.  This must be called
@@ -123,25 +122,21 @@ def init_args_and_threads(cpu_count=4,
 		Config.SET_SEED, rand_seed
 		]).astype(np.int32)
 
-    if Config.SET_SEED >= 0:
-        rs = np.random.RandomState(Config.SET_SEED)
-        LEVEL_SEEDS = np.array(rs.randint(0,2**32-1,Config.NUM_LEVELS)).astype(np.int32)
-    if level_seed is None:
-        level_seed = LEVEL_SEEDS[np.random.randint(0,Config.NUM_LEVELS)]
-        level_seed = np.array(level_seed).astype(np.int32)
     lib.initialize_args(int_args)
-    lib.initialize_seed(level_seed)
-    #lib.initialize_set_seeds(LEVEL_SEEDS)
     lib.initialize_set_monitor_dir(logger.get_dir().encode('utf-8'), {'off': 0, 'first_env': 1, 'all': 2}[monitor_csv_policy])
 
     global already_inited
     if already_inited:
         return
-
+    
+    # init thread and asset
     lib.init(cpu_count)
     already_inited = True
 
 def initialize_physical(args):
+    """Init physical paramters in coinrun
+       Args: dict
+    """
     float_args = np.array([
     		args['gravity'],
                 args['air_control'],
@@ -150,9 +145,21 @@ def initialize_physical(args):
                 args['mix_rate']
     	      ]).astype(np.float)
 
-
     lib.initialize_phys(float_args)
 
+def initialize_seed(level_seed=None,rand_seed=None):
+    """Init seed of each level
+       Should be before vec_create()
+       All env in Vec shared a same seed.
+    """
+    if Config.SET_SEED >= 0:
+        rs = np.random.RandomState(Config.SET_SEED)
+        LEVEL_SEEDS = np.array(rs.randint(0,2**32-1,Config.NUM_LEVELS)).astype(np.int32)
+    if level_seed is None:
+        level_seed = LEVEL_SEEDS[np.random.randint(0,Config.NUM_LEVELS)]
+        level_seed = np.array(level_seed).astype(np.int32)
+    #lib.initialize_set_seeds(LEVEL_SEEDS)
+    lib.initialize_seed(level_seed)
 
 
 
@@ -173,9 +180,10 @@ class CoinRunVecEnv(VecEnv):
     `lump_n`: only used when the environment creates `monitor.csv` files
     `default_zoom`: controls how much of the level the agent can see
     """
-    def __init__(self, game_type, num_envs, lump_n=0, default_zoom=5.0):
+    def __init__(self, game_type, num_envs, level_seed, lump_n=0, default_zoom=5.0):
         self.metadata = {'render.modes': []}
         self.reward_range = (-float('inf'), float('inf'))
+        self.seed = level_seed
 
         self.NUM_ACTIONS = lib.get_NUM_ACTIONS()
         self.RES_W       = lib.get_RES_W()
@@ -199,6 +207,7 @@ class CoinRunVecEnv(VecEnv):
             observation_space=obs_space,
             action_space=gym.spaces.Discrete(self.NUM_ACTIONS),
             )
+        initialize_seed(self.seed)
         self.handle = lib.vec_create(
             game_versions[game_type],
             self.num_envs,
@@ -206,6 +215,18 @@ class CoinRunVecEnv(VecEnv):
             self.hires_render,
             default_zoom)
         self.dummy_info = [{} for _ in range(num_envs)]
+
+    def set_seed(self,seed):
+        """set global variables LEVEL_SEED in cpp"""
+        # current env will use last seed
+        # next env(after state_reset()) will work
+        self.seed = seed
+        initialize_seed(seed)
+        
+    def get_seed(self):
+        """get current level seed in cpp"""
+        self.seed = lib.get_LEVEL_SEED()
+        return self.seed
 
     def __del__(self):
         if hasattr(self, 'handle'):
@@ -250,9 +271,9 @@ class CoinRunVecEnv(VecEnv):
 
         return obs_frames, self.buf_rew, self.buf_done, self.dummy_info
 
-def make(env_id, num_envs, **kwargs):
+def make(env_id, num_envs, seed, **kwargs):
     assert env_id in game_versions, 'cannot find environment "%s", maybe you mean one of %s' % (env_id, list(game_versions.keys()))
-    return CoinRunVecEnv(env_id, num_envs, **kwargs)
+    return CoinRunVecEnv(env_id, num_envs, seed, **kwargs)
 
 def setup_and_load(use_cmd = True, **kwargs):
     args = Config.initialize_args(use_cmd=True, **kwargs)
@@ -270,5 +291,5 @@ if __name__ == '__main__':
         'max_speed':0.5,
         'mix_rate':0.2
     }
-    env = make('standard', 1)
-
+    env = make('standard', 1, 123)
+    print(env.get_seed())

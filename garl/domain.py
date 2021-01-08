@@ -19,7 +19,7 @@ import coinrunenv
 
 def setup_and_load(cmd=True, **kwargs):
     args = Config.initialize_args(use_cmd_line_args=cmd,**kwargs)
-
+    coinrunenv.init_args_and_threads(4)
     return args
 
 def make_general_env(num_env, seed=0, use_sub_proc=True):
