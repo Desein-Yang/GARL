@@ -25,7 +25,7 @@ def main():
     rank = comm.Get_rank()
     size = comm.Get_size()
     print('size',size)
-     
+
     # For wandb package to visualize results curves
     config = Config.get_args_dict()
     wandb.init(
@@ -34,14 +34,14 @@ def main():
         tags=["baseline",Config.RUN_ID.split('-')[0]],
         config=config
     )
-    
+
     seed = int(time.time()) % 10000
     set_global_seeds(seed * 100 + rank)
 
     utils.setup_mpi_gpus()
     utils.mpi_print('Set up gpu')
     utils.mpi_print(args)
- 
+
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True # pylint: disable=E1101
 
@@ -55,11 +55,11 @@ def main():
 
     with tf.Session(config=config):
         env = wrappers.add_final_wrappers(env)
-        
+
         policy = policies_back.get_policy()
         #policy = policies.get_policy()
         utils.mpi_print('Set up policy')
-            
+
         learn_func(policy=policy,
                     env=env,
                     log_interval=args.log_interval,

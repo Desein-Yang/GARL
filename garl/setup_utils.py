@@ -1,10 +1,10 @@
-from config import Config
-import main_utils as utils
+from garl.config import Config
+import garl.main_utils as utils
 import os
 import joblib
-from coinrunenv import init_args_and_threads
+from garl.coinrunenv import init_args_and_threads
 
-    
+
 def load_for_setup_if_necessary():
     restore_file(Config.RESTORE_ID)
 
@@ -27,15 +27,15 @@ def restore_file(restore_id,base_name=None,overlap_config=None,load_key='default
                 sub_dict[key] = restored_args[key]
             else:
                 print('warning key %s not restored' % key)
-              
+
         Config.parse_args_dict(sub_dict)
         if overlap_config is not None:
             Config.parse_args_dict(overlap_config)
-    
+
     print(Config.SET_SEED,Config.NUM_LEVELS)
     print("Init coinrun env threads and env args")
     init_args_and_threads(4)
-    if restore_id == None:    
+    if restore_id == None:
         return None
     else:
         return load_file
@@ -60,7 +60,7 @@ def restore_file_back(restore_id, load_key='default'):
                 print('warning key %s not restored' % key)
 
         Config.parse_args_dict(sub_dict)
-    
+
     from coinrun.coinrunenv import init_args_and_threads
     init_args_and_threads(4)
 
@@ -85,7 +85,7 @@ def restore_checkpoint(restore_id, checkpoint=32, load_key='default'):
                 print('warning key %s not restored' % key)
 
         Config.parse_args_dict(sub_dict)
-    
+
     from coinrun.coinrunenv import init_args_and_threads
     init_args_and_threads(4)
 
@@ -100,7 +100,7 @@ def setup_and_load(use_cmd_line_args=True, **kwargs):
     """
     args = Config.initialize_args(use_cmd_line_args=use_cmd_line_args, **kwargs)
 
-    load_for_setup_if_necessary()
+    #load_for_setup_if_necessary()
 
     return args
 

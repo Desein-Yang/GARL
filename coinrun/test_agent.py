@@ -1,5 +1,5 @@
 """
-Load an agent trained with train_agent.py and 
+Load an agent trained with train_agent.py and
 """
 import joblib
 import time
@@ -48,7 +48,7 @@ def test(sess,load_path,should_render=False,rep_count=Config.REP):
     nenvs = env.num_envs
 
     model = load_model(sess,filename)
-    
+
     agent = create_act_model(sess, env, nenvs)
 
     sess.run(tf.global_variables_initializer())

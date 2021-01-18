@@ -1,3 +1,11 @@
+# ==============================================
+# this file has add random network and domain
+# randomization config, which are specified by
+# rand_key and evo_key.
+#
+#
+# =============================================
+
 from mpi4py import MPI
 import argparse
 import os
@@ -25,6 +33,7 @@ class ConfigSingle(object):
         bool_keys = []
         type_keys = []
         random_keys = []
+        evo_keys = []
 
         # Name sparename type defaylt
         # The runid, used to determine the name for save files.
@@ -35,7 +44,7 @@ class ConfigSingle(object):
 
         # The game to be played.
         # One of {'standard', 'platform', 'maze'} (for CoinRun, CoinRun-Platforms, Random-Mazes)
-        type_keys.append(('gamet', 'game_type', str, 'standard', True)) 
+        type_keys.append(('gamet', 'game_type', str, 'standard', True))
 
         # The convolutional architecture to use
         # One of {'nature', 'impala', 'impalalarge'}
@@ -135,10 +144,27 @@ class ConfigSingle(object):
         random_keys.append(('train-flag', 'train_flag', int, 0))
         random_keys.append(('fm-coeff', 'fm_coeff', float, 0.002))
         random_keys.append(('skip-prob', 'skip_prob', float, 0.1))
-        
+
         # network randomization baselines
         random_keys.append(('ui', 'use_inversion', int, 0))
         random_keys.append(('uct', 'use_color_transform', int, 0))
+
+        # Evolution domain randomization keys
+        # if use evolution domain randomization = 1
+        evo_keys.append(('use-evo','use_evo',int , 1))
+        evo_keys.append(('ini-levels','ini_levels',int , 100))
+        evo_keys.append(('evo-gen','evo_gen',int,8))
+
+        evo_keys.append(('mu-rate','mu_rate',float, 0.5))
+        evo_keys.append(('mu-op','mu_op', int,1))
+        # op = 1: only use random id
+        # op = 2: use data augmentation
+        # op = 3:
+        evo_keys.append(('nc-coef','nc_coef', float,0.0001))
+        evo_keys.append(('diff-op','diff_op', int,1))
+        # op = 1: use evaluate perf as diff
+        # op = 2: use value diff as diff
+        # op = 3: use picture similarity
 
 
         # RES_KEY restore rest setting keys(when type key >5,bool key >3)
@@ -160,6 +186,7 @@ class ConfigSingle(object):
         self.bool_keys = bool_keys
         self.type_keys = type_keys
         self.random_keys = random_keys
+        self.evo_keys = evo_keys
         self.load_data = {}
         self.args_dict = {}
 
@@ -201,7 +228,7 @@ class ConfigSingle(object):
 
             if isinstance(val, str):
                 val = self.process_field(val)
-            
+
             # set Config.ATTR = value in args dict
             setattr(self, ak.upper(), val)
 
@@ -232,7 +259,7 @@ class ConfigSingle(object):
 
         if restore_id is None:
             return None
-        
+
         filename = Config.get_save_file_for_rank(0, self.process_field(restore_id), base_name=base_name)
 
         return filename
@@ -264,14 +291,14 @@ class ConfigSingle(object):
 
         return arg_strs
 
-    # avoid directly use args_dict and modify config 
-    # safe 
+    # avoid directly use args_dict and modify config
+    # safe
     def get_args_dict(self):
         _args_dict = {}
         _args_dict.update(self.args_dict)
 
         return _args_dict
-        
+
     def initialize_args(self, use_cmd_line_args=True, **kwargs):
         """initialize command line args into config"""
         default_args = {}
@@ -299,14 +326,18 @@ class ConfigSingle(object):
         for rk in self.random_keys:
             parser.add_argument('-' + rk[0], '--' + self.deprocess_field(rk[1]), type=rk[2], default=rk[3])
 
+
+        for ek in self.evo_keys:
+            parser.add_argument('-' + ek[0], '--' + self.deprocess_field(ek[1]), type=ek[2], default=ek[3])
+
         # use command args over defaults
         if use_cmd_line_args:
             args = parser.parse_args()
         else:
             args = parser.parse_args(args=[])
-        
+
         if args.restore_id is not None:
-            self.WORKDIR = self.WORKDIR + '/' + str(args.restore_id) 
+            self.WORKDIR = self.WORKDIR + '/' + str(args.restore_id)
         else:
             self.WORKDIR = self.WORKDIR +'/'+ str(args.run_id)
         self.LOGDIR = self.WORKDIR + '/'
@@ -320,7 +351,7 @@ class ConfigSingle(object):
 
         self.parse_all_args(args)
 
-        # args is a dict 
+        # args is a dict
         # args[key]=value
         return args
 

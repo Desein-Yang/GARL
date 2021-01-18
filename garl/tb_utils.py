@@ -1,8 +1,8 @@
 import tensorflow as tf
 import wandb
 from mpi4py import MPI
-from config import Config
 import numpy as np
+from garl.config import Config
 
 def clean_tb_dir():
     comm = MPI.COMM_WORLD
@@ -10,7 +10,7 @@ def clean_tb_dir():
 
     if rank == 0:
         if tf.gfile.Exists(Config.TB_DIR):
-            tf.gfile.DeleteRecursively(Config.TB_DIR) 
+            tf.gfile.DeleteRecursively(Config.TB_DIR)
         tf.gfile.MakeDirs(Config.TB_DIR)
 
     comm.Barrier()
@@ -65,7 +65,7 @@ class TB_Writer(object):
             idx = name_dict[name]
 
             scalar_ph, merged = tuples[idx]
-            
+
             if should_log:
                 if step == -1:
                     step = total_steps[0]
@@ -75,6 +75,6 @@ class TB_Writer(object):
 
                 tb_writer.add_summary(_merged, step)
                 tb_writer.flush()
-        
+
         self.add_summary = add_summary
         self.log_scalar = log_scalar

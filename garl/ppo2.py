@@ -1,24 +1,28 @@
-"""
-Domain randomzation:
-1. add loadpath to load last phase params(not args)
-2. add index in learn(to specify phase)
-3. modify save model to add index
-This is a copy of PPO from openai/baselines (https://github.com/openai/baselines/blob/52255beda5f5c8760b0ae1f676aa656bb1a61f80/baselines/ppo2/ppo2.py) with some minor changes.
-"""
+# ====================================================
+# Domain randomzation:
+# 1. add loadpath to load last phase params(not args)
+# 2. add index in learn(to specify phase)
+# 3. modify save model to add index
+#
+# This is a copy of PPO from openai/baselines
+# (https://github.com/openai/baselines/blob/52255beda5f
+# 5c8760b0ae1f676aa656bb1a61f80/baselines/ppo2/ppo2.py)
+# with some minor changes.
+# ====================================================
 
 import time
 import joblib
 import numpy as np
 import tensorflow as tf
-import wandb 
+import wandb
 from collections import deque
+import pickle
 from mpi4py import MPI
 
-from tb_utils import TB_Writer
-import main_utils as utils
-import setup_utils
-import pickle
-from config import Config
+from garl.tb_utils import TB_Writer
+import garl.main_utils as utils
+import garl.setup_utils
+from garl.config import Config
 
 mpi_print = utils.mpi_print
 
@@ -62,12 +66,12 @@ class MpiAdamOptimizer(tf.train.AdamOptimizer):
 
 class Model(object):
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
-                nsteps, ent_coef, vf_coef, max_grad_norm):
+                nsteps, ent_coef, vf_coef, max_grad_norm, index):
         sess = tf.get_default_session()
 
-        train_model = policy(sess, ob_space, ac_space, nbatch_train, nsteps)
+        train_model = policy(sess, ob_space, ac_space, nbatch_train, nsteps, reuse=tf.AUTO_REUSE)
         norm_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        act_model = policy(sess, ob_space, ac_space, nbatch_act, 1)
+        act_model = policy(sess, ob_space, ac_space, nbatch_act, 1, reuse=tf.AUTO_REUSE)
 
         A = train_model.pdtype.sample_placeholder([None])
         ADV = tf.placeholder(tf.float32, [None])
@@ -109,10 +113,11 @@ class Model(object):
 
         loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef + l2_loss * Config.L2_WEIGHT
 
+        name = 'Adam'+str(index)
         if Config.SYNC_FROM_ROOT:
-            trainer = MpiAdamOptimizer(MPI.COMM_WORLD, learning_rate=LR, epsilon=1e-5)
+            trainer = MpiAdamOptimizer(MPI.COMM_WORLD, learning_rate=LR, epsilon=1e-5, name=name)
         else:
-            trainer = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            trainer = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5, name=name)
 
         grads_and_var = trainer.compute_gradients(loss, params)
 
@@ -164,7 +169,7 @@ class Model(object):
         if Config.SYNC_FROM_ROOT:
             if MPI.COMM_WORLD.Get_rank() == 0:
                 initialize()
-            
+
             global_variables = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="")
             sync_from_root(sess, global_variables) #pylint: disable=E1101
         else:
@@ -199,7 +204,7 @@ class Runner(AbstractEnvRunner):
                 maybeepinfo = info.get('episode')
                 if maybeepinfo: epinfos.append(maybeepinfo)
             mb_rewards.append(rewards)
-        
+
 
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
@@ -241,51 +246,86 @@ def constfn(val):
         return val
     return f
 
+def load_params(sess,load_params):
+    params = tf.trainable_variables('model')
+    assert len(params) == len(load_params), "params mismatch"
+    restores = []
+    for p, load_p in zip(params,load_params):
+        restores.append(p.assign(load_p))
+    sess.run(restores)
+
+def save_params(sess):
+    # scopes is ['model']
+    params = tf.trainable_variables('model')
+    ps = sess.run(params)
+    return ps
+
+# save model params with base_name and mean reward(10)
+def save_model(sess,datapoints=None,base_name=None,i=0):
+    base_dict = {}
+    if datapoints is not None:
+        base_dict['datapoints']= datapoints
+
+    # sess, scopes, filename, base_dict=None
+    if base_name is None:
+        base_name = str(i)
+    else:
+        base_name = base_name + "_" + str(i)
+    utils.save_params_in_scopes(sess, ['model'], Config.get_save_file(base_name=base_name), base_dict)
+
+def load_model(sess,base_name=None,i=0):
+    if base_name is None:
+        base_name = str(i)
+    else:
+        base_name= base_name + "_" + str(i)
+    filename = Config.get_save_file(base_name=base_name)
+    utils.load_params_for_scope(sess, 'model',load_path=filename, load_key='default' )
 
 
-def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
+def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=100, nminibatches=4, noptepochs=4, cliprange=0.2,
             save_interval=10, large_bufsize=100, index=0, load_path=None):
     """train ppo agent"""
-    if index > 0:
-        load_path = Config.get_save_file(i=index-1)
-    
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     mpi_size = comm.Get_size()
 
     sess = tf.get_default_session()
     tb_writer = TB_Writer(sess)
-    
-    if isinstance(lr, float): 
+
+    if isinstance(lr, float):
         lr = constfn(lr)
-    else: 
+    else:
         assert callable(lr)
-    if isinstance(cliprange, float): 
+    if isinstance(cliprange, float):
         cliprange = constfn(cliprange)
-    else: 
+    else:
         assert callable(cliprange)
+
+    start_timesteps = index * total_timesteps
     total_timesteps = int(total_timesteps)
 
     nenvs = env.num_envs
     ob_space = env.observation_space
     ac_space = env.action_space
-    
+
     # each update simulate nsteps
     # each update of a bacth simulate nbatch steps
     # each model input only nbatch_train
     nbatch = nenvs * nsteps
     nbatch_train = nbatch // nminibatches
 
-    # add ½½policy
-    model = Model(policy=policy, ob_space=ob_space, ac_space=ac_space, 
+    model = Model(policy=policy, ob_space=ob_space, ac_space=ac_space,
                   nbatch_act=nenvs, nbatch_train=nbatch_train,
                   nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
-                  max_grad_norm=max_grad_norm)
-    
+                  max_grad_norm=max_grad_norm,index=index)
+
     # if load_path is not none will load params
-    utils.load_params_for_scope(sess,'model',load_path=load_path,load_key="default")
+    if index > 0:
+        #load_path = Config.get_save_file(i=index-1)
+        #utils.load_params_for_scope(sess,'model',load_path=load_path,load_key="default")
+        load_model(sess,base_name=None,i=index-1)
 
     # run rollout in env
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
@@ -312,22 +352,12 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     if Config.SYNC_FROM_ROOT and rank != 0:
         can_save = False
 
-    # save model params with base_name and mean reward(10)
-    def save_model(base_name=None,i=0):
-        base_dict = {'datapoints': datapoints}
-        # sess, scopes, filename, base_dict=None
-        if base_name is None:
-            base_name = str(i)
-        else:
-            base_name = base_name + "_" + str(i)
-        utils.save_params_in_scopes(sess, ['model'], Config.get_save_file(base_name=base_name), base_dict)
-
     for update in range(1, nupdates+1):
-        # n batch 
+        # n batch
         assert nbatch % nminibatches == 0
         nbatch_train = nbatch // nminibatches
         tstart = time.time()
-     
+
         # learning rate decay
         frac = 1.0 - (update - 1.0) / nupdates
         lrnow = lr(frac)
@@ -386,23 +416,28 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         tnow = time.time()
         fps = int(nbatch / (tnow - tstart))
 
-        # log mpiprint and wandb 
+        # log mpiprint and wandb
         if update % log_interval == 0 or update == 1:
             # step elapsed (each length is fixed in PPO)
             step = update*nbatch
-            rew_mean_100 = utils.process_ep_buf(active_ep_buf, tb_writer=tb_writer, suffix='', step=step)
+            rew_mean_100 = utils.process_ep_buf(
+                active_ep_buf,
+                tb_writer=tb_writer,
+                suffix='',
+                step=step
+            )
             success_rate_train = np.sum(np.array([epinfo['r'] for epinfo in active_ep_buf])==10) / large_bufsize
             ep_len_mean_100 = np.nanmean([epinfo['l'] for epinfo in active_ep_buf])
-            
+
             mpi_print('\n-----', update, '-----')
 
             mean_rewards.append(rew_mean_100)
             datapoints.append([step, rew_mean_100])
-            
+
             wandb.tensorflow.log(tf.summary.merge_all())
             wandb.log({
                 'Time_elapsed':tnow - tfirststart,
-                'Step_elapsed':step,
+                'Step_elapsed':step + start_timesteps,
                 'Eplen_mean':ep_len_mean_100,
                 'Succ_rate':success_rate_train,
                 'Rew_mean':rew_mean_100,
@@ -421,6 +456,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             tb_writer.log_scalar(fps, 'fps')
 
             mpi_print('time_elapsed'.ljust(25), tnow - tfirststart)
+            mpi_print('step_elapsed'.ljust(25), step + start_timesteps)
             mpi_print('time_run'.ljust(25), run_t_total)
             mpi_print('time_train'.ljust(25), train_t_total)
             mpi_print('epi_len / total_timesteps'.ljust(25), update*nsteps, total_timesteps)
@@ -434,7 +470,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             # lastest 10 episode info
             if len(epinfobuf10) >= 0:
                 mpi_print('epi_info',[epinfo['r'] for epinfo in epinfobuf10])
-           
+
             # policy loss,entropy loss,clip loss,value loss
             if len(mblossvals):
                 for (lossval, lossname) in zip(lossvals, model.loss_names):
@@ -442,20 +478,18 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                     wandb.log({lossname:lossval})
                     tb_writer.log_scalar(lossval, lossname)
             mpi_print('-----------\n')
-    
+
         # save models every si updates on rank 0 cpu as 'checkpointM'
         if can_save:
             if save_interval and (update % save_interval == 0):
-                save_model()
+                save_model(sess,datapoints,None,index)
 
             for j, checkpoint in enumerate(checkpoints):
                 if (not saved_key_checkpoints[j]) and (step >= (checkpoint * 1e6)):
                     saved_key_checkpoints[j] = True
-                    save_model(str(checkpoint) + 'M',index)
-            
-            #if Config.is_test_rank(): 
-            #    epinfo1000 = test(sess,load_path=str(checkpoint)+'M')
-    save_model()
+                    save_model(sess,datapoints,str(checkpoint) + 'M',index)
+                    act_model = model.train_model
 
-    env.close()
-    return mean_rewards
+    save_model(sess,datapoints,None,index)
+    act_model = model.train_model
+    return mean_rewards, act_model

@@ -20,8 +20,7 @@ import numpy.ctypeslib as npct
 from baselines.common.vec_env import VecEnv
 from baselines import logger
 
-from config import Config
-
+from .config import Config
 from mpi4py import MPI
 from baselines.common import mpi_util
 
@@ -80,7 +79,9 @@ lib.vec_close.argtypes = [c_int]
 lib.vec_step_async_discrete.argtypes = [c_int, npct.ndpointer(dtype=np.int32, ndim=1)]
 
 lib.initialize_args.argtypes = [npct.ndpointer(dtype=np.int32, ndim=1)]
+lib.initialize_set_seeds.argtypes = [npct.ndpointer(dtype=np.int32, ndim=1)]
 lib.initialize_seed.argtypes = [c_int]
+lib.initialize_diff.argtypes = [c_int]
 lib.initialize_phys.argtypes = [npct.ndpointer(dtype=np.float, ndim=1)]
 lib.initialize_set_monitor_dir.argtypes = [c_char_p, c_int]
 
@@ -115,11 +116,14 @@ def init_args_and_threads(cpu_count=4,
 
     int_args = np.array([
 		int(is_high_difficulty),
-		Config.NUM_LEVELS,
+		Config.INI_LEVELS,
 		int(Config.PAINT_VEL_INFO),
 		Config.USE_DATA_AUGMENTATION,
 		game_versions[Config.GAME_TYPE],
-		Config.SET_SEED, rand_seed
+		Config.SET_SEED,
+                rand_seed,
+                False, # if use specified diff?
+                False  # if use specified physical params?
 		]).astype(np.int32)
 
     lib.initialize_args(int_args)
@@ -128,40 +132,65 @@ def init_args_and_threads(cpu_count=4,
     global already_inited
     if already_inited:
         return
-    
+
     # init thread and asset
     lib.init(cpu_count)
     already_inited = True
 
-def initialize_physical(args):
+def initialize_physical(args,diff=True,phys=True):
     """Init physical paramters in coinrun
        Args: dict
     """
-    float_args = np.array([
-    		args['gravity'],
+    if diff:
+        float_args = np.array([
+		args['gravity'],
                 args['air_control'],
                 args['max_jump'],
                 args['max_speed'],
                 args['mix_rate']
-    	      ]).astype(np.float)
+        ]).astype(np.float)
+        lib.initialize_phys(float_args)
 
-    lib.initialize_phys(float_args)
+    if phys:
+        int_args = np.array([args["diffculty"]]).astype(np.int)
+        lib.initialize_diff(int_args)
 
-def initialize_seed(level_seed=None,rand_seed=None):
+def initialize_seed(level_seed=None):
+    """Init seed of each level
+       Should be before vec_create()
+       All env in Vec shared a same seed.
+    """
+    if level_seed is None:
+        assert Config.SET_SEED != -1,"set seed should not be -1"
+        rs = np.random.RandomState(Config.SET_SEED)
+        level_seed = rs.randint(0,2**31-1,Config.INI_LEVELS)
+
+    if type(level_seed) is set:
+        level_seed = list(level_seed)
+    elif type(level_seed) is int:
+        level_seed = [level_seed]
+    level_seed = np.array(level_seed).astype(np.int32)
+    if len(level_seed)==1:
+        lib.initialize_seed(level_seed)
+    else:
+        lib.initialize_set_seeds(level_seed)
+
+def initialize_seed2(level_seed=None,rand_seed=None):
     """Init seed of each level
        Should be before vec_create()
        All env in Vec shared a same seed.
     """
     if Config.SET_SEED >= 0:
         rs = np.random.RandomState(Config.SET_SEED)
-        LEVEL_SEEDS = np.array(rs.randint(0,2**32-1,Config.NUM_LEVELS)).astype(np.int32)
+        LEVEL_SEEDS = np.array(rs.randint(0,2**31-1,Config.NUM_LEVELS)).astype(np.int32)
     if level_seed is None:
         level_seed = LEVEL_SEEDS[np.random.randint(0,Config.NUM_LEVELS)]
         level_seed = np.array(level_seed).astype(np.int32)
     #lib.initialize_set_seeds(LEVEL_SEEDS)
     lib.initialize_seed(level_seed)
 
-
+def initialize_theme():
+    pass
 
 @atexit.register
 def shutdown():
@@ -180,10 +209,9 @@ class CoinRunVecEnv(VecEnv):
     `lump_n`: only used when the environment creates `monitor.csv` files
     `default_zoom`: controls how much of the level the agent can see
     """
-    def __init__(self, game_type, num_envs, level_seed, lump_n=0, default_zoom=5.0):
+    def __init__(self, game_type, num_envs, seed, lump_n=0, default_zoom=5.0):
         self.metadata = {'render.modes': []}
         self.reward_range = (-float('inf'), float('inf'))
-        self.seed = level_seed
 
         self.NUM_ACTIONS = lib.get_NUM_ACTIONS()
         self.RES_W       = lib.get_RES_W()
@@ -207,7 +235,7 @@ class CoinRunVecEnv(VecEnv):
             observation_space=obs_space,
             action_space=gym.spaces.Discrete(self.NUM_ACTIONS),
             )
-        initialize_seed(self.seed)
+        initialize_seed(seed)
         self.handle = lib.vec_create(
             game_versions[game_type],
             self.num_envs,
@@ -220,13 +248,20 @@ class CoinRunVecEnv(VecEnv):
         """set global variables LEVEL_SEED in cpp"""
         # current env will use last seed
         # next env(after state_reset()) will work
-        self.seed = seed
         initialize_seed(seed)
-        
+
     def get_seed(self):
         """get current level seed in cpp"""
-        self.seed = lib.get_LEVEL_SEED()
-        return self.seed
+        return lib.get_LEVEL_SEED()
+
+    def get_phys(self):
+        return lib.get_PHYC_PARAM()
+
+    def get_diff(self):
+        return lib.get_DIFFCULTY()
+
+    def set_phys(self,args):
+        initialize_physical(args,True,True)
 
     def __del__(self):
         if hasattr(self, 'handle'):
@@ -238,7 +273,7 @@ class CoinRunVecEnv(VecEnv):
         self.handle = 0
 
     def reset(self):
-        print("CoinRun ignores resets")
+        #print("CoinRun ignores resets")
         obs, _, _, _ = self.step_wait()
         return obs
 
@@ -271,25 +306,40 @@ class CoinRunVecEnv(VecEnv):
 
         return obs_frames, self.buf_rew, self.buf_done, self.dummy_info
 
-def make(env_id, num_envs, seed, **kwargs):
+def make(env_id, num_envs, seed=None, **kwargs):
     assert env_id in game_versions, 'cannot find environment "%s", maybe you mean one of %s' % (env_id, list(game_versions.keys()))
     return CoinRunVecEnv(env_id, num_envs, seed, **kwargs)
 
 def setup_and_load(use_cmd = True, **kwargs):
     args = Config.initialize_args(use_cmd=True, **kwargs)
     init_args_and_threads(4)
+    return args
 
-if __name__ == '__main__':
-    import main_utils as utils
-    import setup_utils
-    utils.setup_mpi_gpus()
-    setup_and_load()
-    args = {
-        'gravity':0.2,
-        'air_control':0.15,
-        'max_jump':1.5,
-        'max_speed':0.5,
-        'mix_rate':0.2
-    }
-    env = make('standard', 1, 123)
-    print(env.get_seed())
+#if __name__ == '__main__':
+#    import main_utils as utils
+#    import setup_utils
+#    utils.setup_mpi_gpus()
+#    setup_and_load()
+#    from wrappers import add_mutate_wrappers
+#    args = {
+#       'gravity':0.2,
+#        'air_control':0.15,
+#        'max_jump':1.5,
+#        'max_speed':0.5,
+#        'mix_rate':0.2,
+#        'diffculty':2
+#    }
+#    seeds = [123,453,345.567,678]
+#    env = make('standard', 1, seeds)
+#    env = add_mutate_wrappers(env,Config)
+#    print(env.get_seed())
+#    hist = env.mutate()
+#    print(hist)
+#    print(env.get_hist())
+#    print(env.get_seed())
+#    hist = env.mutate()
+#    env.set_seed(465)
+#    act = np.array([env.action_space.sample()])
+#    env.step(act)
+#    print(env.get_seed())
+

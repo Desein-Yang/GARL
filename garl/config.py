@@ -2,8 +2,6 @@
 # this file has add random network and domain
 # randomization config, which are specified by
 # rand_key and evo_key.
-#
-#
 # =============================================
 
 from mpi4py import MPI
@@ -65,7 +63,8 @@ class ConfigSingle(object):
         # If SET_SEED = -1, this seed is not used and level seeds with be drawn from the range [0, NUM_LEVELS).
         # Use SET_SEED = -1 and NUM_LEVELS = 500 to train with the same levels in the paper.
         # NOTE: This value must and will be saved, in order to use the same training set for evaluation and/or visualization.
-        type_keys.append(('set-seed', 'set_seed', int, -1, True))
+        # now it just used to generate random seed
+        type_keys.append(('set-seed', 'set_seed', int, 123, True))
 
         # PPO Hyperparameters
         type_keys.append(('ns', 'num_steps', int, 256))
@@ -158,7 +157,7 @@ class ConfigSingle(object):
         evo_keys.append(('mu-rate','mu_rate',float, 0.5))
         evo_keys.append(('mu-op','mu_op', int,1))
         # op = 1: only use random id
-        # op = 2: use data augmentation
+        # op = 2:
         # op = 3:
         evo_keys.append(('nc-coef','nc_coef', float,0.0001))
         evo_keys.append(('diff-op','diff_op', int,1))

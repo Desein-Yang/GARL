@@ -444,8 +444,8 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                     saved_key_checkpoints[j] = True
                     save_model(str(checkpoint) + 'M')
             
-            #if Config.is_test_rank(): 
-            #    epinfo1000 = test(sess,load_path=str(checkpoint)+'M')
+            if Config.is_test_rank(): 
+                epinfo1000 = test(sess,load_path=str(checkpoint)+'M')
     save_model()
 
     env.close()

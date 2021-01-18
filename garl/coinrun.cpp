@@ -76,7 +76,10 @@ float AIR_CONTROL = 0.15;
 float MAX_JUMP = 1.5;
 float MAX_SPEED = 0.5;
 float MIX_RATE = 0.2;
-bool VARY_PARAM = false;
+int DIFFCULTY = 2;
+
+bool USE_VARY_DIFF = false;
+bool USE_VARY_PARAM = false;
 //=======================
 
 const int DOWNSAMPLE = 16;
@@ -313,17 +316,19 @@ public:
       default_zoom = 5.0;
     }
     
-    gravity = GRAVITY;
-    air_control = AIR_CONTROL;
-    max_jump = MAX_JUMP;
-    max_speed = MAX_SPEED;
-    mix_rate = MIX_RATE;
-
-    //gravity = .2;
-    //air_control = .15;
-    //max_jump = 1.5;
-    //max_speed = .5;
-    //mix_rate = .2;
+    if (USE_VARY_PARAM){
+      gravity = GRAVITY;
+      air_control = AIR_CONTROL;
+      max_jump = MAX_JUMP;
+      max_speed = MAX_SPEED;
+      mix_rate = MIX_RATE;
+    }else{
+      gravity = .2;
+      air_control = .15;
+      max_jump = 1.5;
+      max_speed = .5;
+      mix_rate = .2;
+    }
 
     max_dy = max_jump * max_jump / (2*gravity);
     max_dx = max_speed * 2 * max_jump / gravity;
@@ -371,7 +376,8 @@ public:
   }
 
   int choose_difficulty(int max_difficulty) {
-    return USE_HIGH_DIF ? (max_difficulty) : randn(max_difficulty) + 1;
+    //return USE_HIGH_DIF ? (max_difficulty) : randn(max_difficulty) + 1;
+      return USE_VARY_DIFF ? (DIFFCULTY) : (USE_HIGH_DIF ? (max_difficulty) : randn(max_difficulty) + 1);  
   }
 
   void generate_coin_maze() {
@@ -1463,6 +1469,7 @@ void state_reset(const std::shared_ptr<State>& state, int game_type)
   if (USE_LEVEL_SET) {
     int level_index = global_rand_gen.randint(0, NUM_LEVELS);
     level_seed = LEVEL_SEEDS[level_index];
+    LEVEL_SEED = level_seed;
   } else {
     //level_seed = global_rand_gen.randint();
     level_seed = LEVEL_SEED;
@@ -1822,8 +1829,13 @@ int get_RES_W()  { return RES_W; }
 int get_RES_H()  { return RES_H; }
 int get_VIDEORES()  { return VIDEORES; }
 
+// ======== self-defined ============
 int get_LEVEL_SEED() { return LEVEL_SEED; }
+int get_DIFFCULTY() { return DIFFCULTY; }
+float params[5] = {GRAVITY,AIR_CONTROL,MAX_JUMP,MAX_SPEED,MIX_RATE}; 
+float* get_PHYC_PARAM() { return  params; }
 
+// ===================================
 
 void initialize_args(int *int_args) {
   USE_HIGH_DIF = int_args[0] == 1;
@@ -1831,6 +1843,8 @@ void initialize_args(int *int_args) {
   PAINT_VEL_INFO = int_args[2] == 1;
   USE_DATA_AUGMENTATION = int_args[3] == 1;
   DEFAULT_GAME_TYPE = int_args[4];
+  USE_VARY_DIFF = int_args[7];
+  USE_VARY_PARAM = int_args[8];
 
   int training_sets_seed = int_args[5];
   int rand_seed = int_args[6];
@@ -1863,13 +1877,19 @@ void initialize_seed(int seed){
 }
 
 void initialize_phys(float *float_args){
-    VARY_PARAM = true;
-
+    USE_VARY_PARAM = true;
+    
     GRAVITY = float_args[0];
     AIR_CONTROL = float_args[1];
     MAX_JUMP = float_args[2];
     MAX_SPEED = float_args[3];
     MIX_RATE = float_args[4];
+}
+
+void initialize_diff(int int_args){
+    USE_VARY_DIFF = true;
+
+    DIFFCULTY = int_args;
 }
 
 void initialize_set_monitor_dir(const char *d, int monitor_csv_policy_)
