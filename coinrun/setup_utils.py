@@ -28,11 +28,11 @@ def restore_file(restore_id,base_name=None,overlap_config=None,load_key='default
                 print('warning key %s not restored' % key)
 
         Config.parse_args_dict(sub_dict)
+        print("Load params")
         if overlap_config is not None:
             Config.parse_args_dict(overlap_config)
 
     from coinrun.coinrunenv import init_args_and_threads
-    print(Config.SET_SEED,Config.NUM_LEVELS)
     print("Init coinrun env threads and env args")
     init_args_and_threads(4)
     if restore_id == None:

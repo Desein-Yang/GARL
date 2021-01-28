@@ -77,6 +77,7 @@ class ConfigSingle(object):
         type_keys.append(('vf', 'vf_coeff', float, 0.5))
         type_keys.append(('mgn', 'max_grad_norm', float, 0.5))
         type_keys.append(('clp', 'clip_range', float, 0.2))
+        type_keys.append(('ts', 'total_step', int, 256))
 
         # Should the agent's velocity be painted in the upper left corner of observations.
         # 1/0 means True/False
@@ -150,8 +151,11 @@ class ConfigSingle(object):
 
         # Evolution domain randomization keys
         # if use evolution domain randomization = 1
+        evo_keys.append(('es','eval_step',int , 1))
         evo_keys.append(('use-evo','use_evo',int , 1))
-        evo_keys.append(('ini-levels','ini_levels',int , 100))
+        evo_keys.append(('ini-levels','ini_levels',int , 200))
+        evo_keys.append(('spa-levels','spa_levels',int , 10000))
+        evo_keys.append(('thres-hold','thres-hold',float, 0.05))
         evo_keys.append(('train-iter','train_iter',int,8))
 
         evo_keys.append(('mu-rate','mu_rate',float, 0.5))

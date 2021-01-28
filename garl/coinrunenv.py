@@ -20,7 +20,7 @@ import numpy.ctypeslib as npct
 from baselines.common.vec_env import VecEnv
 from baselines import logger
 
-from .config import Config
+from garl.config import Config
 from mpi4py import MPI
 from baselines.common import mpi_util
 
@@ -64,6 +64,8 @@ lib.get_NUM_ACTIONS.restype = c_int
 lib.get_RES_W.restype = c_int
 lib.get_RES_H.restype = c_int
 lib.get_VIDEORES.restype = c_int
+lib.get_NUM_LEVELS.restype = c_int
+lib.get_LEVEL_SEEDS.restype = c_int
 
 lib.vec_create.argtypes = [
    c_int,    # game_type
@@ -80,6 +82,7 @@ lib.vec_step_async_discrete.argtypes = [c_int, npct.ndpointer(dtype=np.int32, nd
 
 lib.initialize_args.argtypes = [npct.ndpointer(dtype=np.int32, ndim=1)]
 lib.initialize_set_seeds.argtypes = [npct.ndpointer(dtype=np.int32, ndim=1)]
+lib.initialize_num.argtypes = [c_int]
 lib.initialize_seed.argtypes = [c_int]
 lib.initialize_diff.argtypes = [c_int]
 lib.initialize_phys.argtypes = [npct.ndpointer(dtype=np.float, ndim=1)]
@@ -160,34 +163,21 @@ def initialize_seed(level_seed=None):
        Should be before vec_create()
        All env in Vec shared a same seed.
     """
-    if level_seed is None:
+    assert level_seed is not None
+    if len(level_seed) == 0:
         assert Config.SET_SEED != -1,"set seed should not be -1"
         rs = np.random.RandomState(Config.SET_SEED)
         level_seed = rs.randint(0,2**31-1,Config.INI_LEVELS)
 
-    if type(level_seed) is set:
-        level_seed = list(level_seed)
-    elif type(level_seed) is int:
+    if type(level_seed) is int:
         level_seed = [level_seed]
     level_seed = np.array(level_seed).astype(np.int32)
-    if len(level_seed)==1:
+    lib.initialize_num(len(level_seed))
+    if len(level_seed) == 1:
         lib.initialize_seed(level_seed)
     else:
         lib.initialize_set_seeds(level_seed)
 
-def initialize_seed2(level_seed=None,rand_seed=None):
-    """Init seed of each level
-       Should be before vec_create()
-       All env in Vec shared a same seed.
-    """
-    if Config.SET_SEED >= 0:
-        rs = np.random.RandomState(Config.SET_SEED)
-        LEVEL_SEEDS = np.array(rs.randint(0,2**31-1,Config.NUM_LEVELS)).astype(np.int32)
-    if level_seed is None:
-        level_seed = LEVEL_SEEDS[np.random.randint(0,Config.NUM_LEVELS)]
-        level_seed = np.array(level_seed).astype(np.int32)
-    #lib.initialize_set_seeds(LEVEL_SEEDS)
-    lib.initialize_seed(level_seed)
 
 def initialize_theme():
     pass
@@ -235,6 +225,8 @@ class CoinRunVecEnv(VecEnv):
             observation_space=obs_space,
             action_space=gym.spaces.Discrete(self.NUM_ACTIONS),
             )
+        if seed is None:
+            seed = []
         initialize_seed(seed)
         self.handle = lib.vec_create(
             game_versions[game_type],
@@ -245,14 +237,18 @@ class CoinRunVecEnv(VecEnv):
         self.dummy_info = [{} for _ in range(num_envs)]
 
     def set_seed(self,seed):
-        """set global variables LEVEL_SEED in cpp"""
+        """set global variables LEVEL_SEED or LEVEL_SEEDS in cpp"""
         # current env will use last seed
         # next env(after state_reset()) will work
         initialize_seed(seed)
 
     def get_seed(self):
         """get current level seed in cpp"""
-        return lib.get_LEVEL_SEED()
+        num_levels = lib.get_NUM_LEVELS()
+        seed = [0] * num_levels
+        for i in range(num_levels):
+            seed[i] = lib.get_LEVEL_SEEDS(i)
+        return seed
 
     def get_phys(self):
         return lib.get_PHYC_PARAM()
@@ -315,12 +311,12 @@ def setup_and_load(use_cmd = True, **kwargs):
     init_args_and_threads(4)
     return args
 
-#if __name__ == '__main__':
-#    import main_utils as utils
-#    import setup_utils
-#    utils.setup_mpi_gpus()
-#    setup_and_load()
-#    from wrappers import add_mutate_wrappers
+if __name__ == '__main__':
+    import garl.main_utils as utils
+    import garl.setup_utils
+    utils.setup_mpi_gpus()
+    setup_and_load()
+    from garl.wrappers import RandSeedWrapper
 #    args = {
 #       'gravity':0.2,
 #        'air_control':0.15,
@@ -329,17 +325,15 @@ def setup_and_load(use_cmd = True, **kwargs):
 #        'mix_rate':0.2,
 #        'diffculty':2
 #    }
-#    seeds = [123,453,345.567,678]
-#    env = make('standard', 1, seeds)
-#    env = add_mutate_wrappers(env,Config)
-#    print(env.get_seed())
-#    hist = env.mutate()
-#    print(hist)
-#    print(env.get_hist())
-#    print(env.get_seed())
-#    hist = env.mutate()
-#    env.set_seed(465)
-#    act = np.array([env.action_space.sample()])
-#    env.step(act)
-#    print(env.get_seed())
+    seeds = [123,453,345,567,678]
+    env = make('standard', 1, seeds)
+    env = RandSeedWrapper(env,seeds,len(seeds))
+    print('seed',env.get_seed())
+    seeds = [123,453,345,567,678,890]
+    env.set_seed(seeds)
+    print('seed2',env.get_seed())
+    env.set_seed(465)
+    print('seed3',env.get_seed())
+    act = np.array([env.action_space.sample()])
+    env.step(act)
 

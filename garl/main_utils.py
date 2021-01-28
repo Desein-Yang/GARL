@@ -68,6 +68,19 @@ def load_args(load_key='default'):
 def load_all_params(sess):
     load_params_for_scope(sess, 'model')
 
+def load_datapoints(load_path=None,load_key=None):
+    if load_path is None:
+        load_data = Config.get_load_data(load_key)
+    else:
+        load_path = file_to_path(load_path)
+        if os.path.exists(load_path):
+            load_data = joblib.load(load_path)
+            print('Load file',load_path)
+    if load_data is None:
+        return False
+
+    return load_data['datapoints']
+
 def load_params_for_scope(sess, scope, load_key='default',load_path = None):
     if load_path is None:
         load_data = Config.get_load_data(load_key)
@@ -76,6 +89,8 @@ def load_params_for_scope(sess, scope, load_key='default',load_path = None):
         if os.path.exists(load_path):
             load_data = joblib.load(load_path)
             print('Load file',load_path)
+        else:
+            raise ValueError
     if load_data is None:
         return False
 
@@ -245,3 +260,4 @@ def process_ep_buf(epinfobuf, tb_writer=None, suffix='', step=0):
                 tb_writer.log_scalar(sub_rew, key, step)
 
     return rew_mean
+

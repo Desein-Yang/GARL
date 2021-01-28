@@ -151,6 +151,7 @@ class ConfigSingle(object):
 
         # Evolution domain randomization keys
         # if use evolution domain randomization = 1
+        evo_keys.append(('eval-step','eval-step',int , 0))
         evo_keys.append(('use-evo','use_evo',int , 1))
         evo_keys.append(('ini-levels','ini_levels',int , 100))
         evo_keys.append(('evo-gen','evo_gen',int,8))
@@ -192,9 +193,9 @@ class ConfigSingle(object):
 
     def is_test_rank(self,frac=4):
         if self.TEST:
-            rank = MPI.COMM_WORLD.Get_rank()
-            return rank % frac == 1
-
+            #rank = MPI.COMM_WORLD.Get_rank()
+            #return rank % frac == 1
+            return True
         return False
 
     def get_test_frac(self):

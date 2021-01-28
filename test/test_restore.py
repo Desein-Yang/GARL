@@ -1,6 +1,6 @@
 import wandb
 import numpy as np
-#import coinrun.enjoy as test 
+#import coinrun.enjoy as test
 import coinrun.main_utils as utils
 from coinrun.config import Config
 import coinrun.setup_utils as setup_utils
@@ -26,14 +26,14 @@ def enjoy_env_sess(sess,checkpoint,overlap):
     mpi_print('test levels seed',Config.SET_SEED)
     mpi_print('test levels ',Config.NUM_LEVELS)
     rep_count = 50
-    
+
     env = utils.make_general_env(20)
     env = wrappers.add_final_wrappers(env)
     nenvs = env.num_envs
 
     sess.run(tf.global_variables_initializer())
     args_now = Config.get_args_dict()
-    #args_run = utils.load_args()  
+    #args_run = utils.load_args()
     agent = create_act_model(sess, env, nenvs)
 
     # load name is specified by config.RESTORE_ID adn return True/False
@@ -41,7 +41,7 @@ def enjoy_env_sess(sess,checkpoint,overlap):
         base_name = str(8*checkpoint)  + 'M'
     elif checkpoint == 0:
         mean_score = 0.0
-        succ_rate = 0.0 
+        succ_rate = 0.0
         wandb.log({
             'Rew_mean':mean_score,
             'Succ_rate':succ_rate,
@@ -50,14 +50,15 @@ def enjoy_env_sess(sess,checkpoint,overlap):
         return mean_score, succ_rate
     else:
         base_name = None
-   
+
+    sess.run(tf.global_variables_initializer())
     # env init here
     load_file = setup_utils.restore_file(
                 Config.RESTORE_ID,
                 overlap_config=overlap,
                 base_name=base_name
     )
-    
+
     is_loaded = utils.load_params_for_scope(sess, 'model')
     if not is_loaded:
         mpi_print('NO SAVED PARAMS LOADED')
@@ -65,7 +66,7 @@ def enjoy_env_sess(sess,checkpoint,overlap):
 
     obs = env.reset()
     t_step = 0
-    
+
     scores = np.zeros((nenvs,rep_count))
     eplens = np.zeros((nenvs,rep_count))
     #scores = np.array([0] * nenvs)
@@ -91,7 +92,7 @@ def enjoy_env_sess(sess,checkpoint,overlap):
             obs, rew, done, info = env.step(action)
             rews[:,count] += rew
             t += 1
-            
+
             for i, d in enumerate(done):
                 if d:
                     eplens[i][count]=t
@@ -103,11 +104,11 @@ def enjoy_env_sess(sess,checkpoint,overlap):
                             scores[i][count] = info[i].get('episode')['r']
 
         return scores, rews, eplens
-   
+
     if is_loaded:
-        mpi_print(load_file)	
+        mpi_print(load_file)
         scores, rews, eplens = rollout(obs,state,done)
-     
+
     size = MPI.COMM_WORLD.Get_size()
     rank = MPI.COMM_WORLD.Get_rank()
     if size == 1:
@@ -150,9 +151,9 @@ def enjoy_env_sess(sess,checkpoint,overlap):
                        'Rew_mean':mean_score,
                        'Succ_rate':succ_rate
             })
-    
-    return mean_score,succ_rate 
- 
+
+    return mean_score,succ_rate
+
 def main():
     # load from restore file
     args_dict = utils.load_args()
@@ -160,10 +161,10 @@ def main():
     test_args = setup_utils.setup_and_load()
     if 'NR' in Config.RESTORE_ID:
         Config.USE_LSTM = 2
-    if 'dropout' in Config.RESTORE_ID: 
+    if 'dropout' in Config.RESTORE_ID:
         Config.DROPOUT = 0
         Config.USE_BATCH_NORM = 0
-    
+
     wandb.init(
         project="coinrun",
         notes="test",
@@ -173,23 +174,23 @@ def main():
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
-
     seed = np.random.randint(100000)
     Config.SET_SEED = seed
-   
+
     overlap = {
         'set_seed':Config.SET_SEED,
         'rep':Config.REP,
+        'highd':Config.HIGH_DIFFICULTY,
         'num_levels':Config.NUM_LEVELS,
         'use_lstm':Config.USE_LSTM,
         'dropout':Config.DROPOUT,
         'use_batch_norm':Config.USE_BATCH_NORM
-    } 
-   
-    load_file = Config.get_load_filename(restore_id=Config.RESTORE_ID) 
+    }
+
+    load_file = Config.get_load_filename(restore_id=Config.RESTORE_ID)
     mpi_print('load file name',load_file)
     mpi_print('seed',seed)
-    mpi_print("---------------------------------------") 
+    mpi_print("---------------------------------------")
     for checkpoint in range(1,33):
         with tf.Session() as sess:
             steps_elapsed = checkpoint * 8000000

@@ -100,7 +100,7 @@ def setup_and_load(use_cmd_line_args=True, **kwargs):
     """
     args = Config.initialize_args(use_cmd_line_args=use_cmd_line_args, **kwargs)
 
-    #load_for_setup_if_necessary()
+    load_for_setup_if_necessary()
 
     return args
 

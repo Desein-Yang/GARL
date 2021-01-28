@@ -1,5 +1,6 @@
 import gym
 import numpy as np
+import tensorflow as tf
 
 class EpsilonGreedyWrapper(gym.Wrapper):
     """
@@ -96,7 +97,7 @@ class EpisodeRewardWrapper(gym.Wrapper):
 
 # ========= self defined =================
 
-def add_mutate_wrappers(env,Config):
+def add_mutate_wrappers(env):
     """Mu_op is 1, use another seed in extra set.
        Mu_op is 2, use gauss noise on physical."""
     if Config.MU_OP == 0:
@@ -105,6 +106,8 @@ def add_mutate_wrappers(env,Config):
         return RandSeedWrapper(env)
     elif Config.MU_OP == 2:
         return ParamWrapper(env)
+    elif Config.MU_OP == 3:
+        return RandConvWrapper(env)
 
 class ParamWrapper(gym.Wrapper):
     def __init__(self,env,args,seed):
@@ -133,14 +136,62 @@ class ParamWrapper(gym.Wrapper):
     def get_param(self):
         return self.params
 
+# provide modifiable seed API
 class RandSeedWrapper(gym.Wrapper):
-    def __init__(self,env,ini_size,rand_seed):
+    def __init__(self,env,ini_set=None,ini_size=100):
+        super(RandSeedWrapper, self).__init__(env)
+        self.env = env
+        if ini_set is None:
+            ini_set = np.random.randint(0,2**31-1,ini_size)
+        self.ini_set = ini_set
+        self.cur_set = ini_set
+        self.env.set_seed(self.ini_set)
+        self.hist = set(ini_set)
+
+    def replace_seed(self,a,b):
+        """replace a with b"""
+        if a in self.cur_set:
+            self.cur_set.remove(a)
+        self.cur_set.add(b)
+        self.hist = self.hist.union(set(b))
+
+        self.set_seed(self.cur_set)
+        return b
+
+    def add_seed(self,a):
+        if type(a) is int:
+            b = [a]
+        self.cur_set.union(set(b))
+        self.hist = self.hist.union(set(a))
+        self.env.set_seed(self.cur_set)
+
+    def set_seed(self,seed):
+        if seed is None:
+            seed = []
+        elif type(seed) is int:
+            seed = [seed]
+        elif type(seed) is set:
+            seed = list(seed)
+        self.env.set_seed(seed)
+
+    def get_seed(self):
+        return self.env.get_seed()
+
+    def reset_seed(self):
+        self.hist = set(self.ini_set)
+        self.cur_set = self.ini_set
+        self.set_seed(self.ini_set)
+
+
+# back 20200128
+class RandSeed2Wrapper(gym.Wrapper):
+    def __init__(self,env,ini_size,spare_size,rand_seed):
         super(RandSeedWrapper, self).__init__(env)
         if rand_seed is not None:
             self.rs = np.random.RandomState(rand_seed)
         else:
             self.rs = np.random.RandomState()
-        self.set_size = 1000
+        self.set_size = spare_size
         if self.set_size > 1:
             self.mutate_set = set(self.rs.randint(0,2**31-1,self.set_size))
         self.hist = []
@@ -153,8 +204,8 @@ class RandSeedWrapper(gym.Wrapper):
         add another seed b from mutate_set"""
         self.ini_set.remove(a)
         b = np.random.choice(list(self.mutate_set))
-        self.mutate_set.remove(b)
-        self.ini_set.add(a)
+        #self.mutate_set.remove(b)
+        self.ini_set.add(b)
         self.hist.append(self.ini_set)
 
         self.set_seed(self.ini_set)
@@ -167,13 +218,7 @@ class RandSeedWrapper(gym.Wrapper):
         self.set_seed(self.ini_set)
 
     def set_ini_set(self,ini_set):
-        size = len(set(ini_set))
-        if size == self.ini_size:
-            self.ini_set = set(ini_set)
-        elif size > self.ini_size:
-            self.ini_set = set(ini_set[self.ini_size])
-        else:
-            raise ValueError
+        self.ini_set = set(ini_set)
         self.set_seed(self.ini_set)
 
     def set_seed(self,seed):
@@ -188,9 +233,95 @@ class RandSeedWrapper(gym.Wrapper):
 
     def reset_seed(self):
         self.ini_set = set(self.rs.randint(0,2**31-1,self.ini_size))
-        self.mutate_set.union(set(self.hist))
+        self.mutate_set = self.mutate_set.union(set(self.hist))
         self.hist = []
         self.set_seed(self.ini_set)
+
+
+class RandConvWrapper(gym.Wrapper):
+    def __init__(self,env,kernel=3,depth=3,rh=0.2,channel=3,seed=None):
+        super(RandConvWrapper, self).__init__(env)
+        self.env = env
+        self.kernel = kernel
+        self.depth = depth
+        self.rh = rh
+        self.channel = channel
+
+        fan_in = channel * kernel * kernel
+        fan_out = depth * kernel * kernel
+
+        if seed is None:
+            self.seed = 0
+        else:
+            self.seed = seed
+        self.initializer = tf.contrib.layers.xavier_initializer(
+                    uniform=True,
+                    seed=self.seed,
+                    dtype=tf.float32
+        )
+        #self.initializer = tf.initialiers.he_normal(seed)
+
+    def reset(self):
+        obs = self.env.reset()
+        self.initializer = tf.contrib.layers.xavier_initializer(
+                    uniform=True,
+                    seed=self.seed,
+                    dtype=tf.float32
+            )
+
+        return self.conv(obs)
+
+    def step(self, act):
+        obs,rew,done,epi = self.env.step(act)
+        out = self.conv(obs)
+        with tf.Session() as sess:
+            obs = sess.run(out)
+
+        return obs,rew,done,epi
+
+    def step_clean(self,act):
+        obs,rew,done,epi = self.env.step(act)
+
+        return obs,rew,done,epi
+
+    def set_seed(self,seed):
+        self.seed = seed
+        self.initializer = tf.contrib.layers.xavier_initializer(
+                    uniform=True,
+                    seed=self.seed,
+                    dtype=tf.float32
+        )
+
+    def get_seed(self,seed):
+        return self.seed
+
+    def conv(self,images):
+        images = tf.to_float(images)
+        mask_vbox = tf.Variable(tf.zeros_like(images, dtype=bool), trainable=False)
+        mask_shape = tf.shape(images)
+
+        mh = tf.cast(
+                tf.cast(mask_shape[1], dtype=tf.float32)*self.rh, dtype=tf.int32
+        )
+        mw = mh * 2
+        mask_vbox = mask_vbox[:,:mh,:mw].assign(
+            tf.ones([mask_shape[0],mh,mw,mask_shape[3]],dtype=bool)
+        )
+
+        img = tf.where(mask_vbox, x=tf.zeros_like(images), y= images)
+        img = tf.to_float(img)
+        rand_img = tf.layers.conv2d(img, self.depth, self.kernel,
+                                    padding='same',
+                                    kernel_initializer=self.initializer,
+                                    trainable=False,
+                                    name='randcnn')
+        out = tf.where(mask_vbox,x=images,y=rand_img,name='randout')
+        return out
+
+    def save():
+        import joblib
+        return self.conv.weight()
+
 
 # =======================================
 def add_final_wrappers(env):

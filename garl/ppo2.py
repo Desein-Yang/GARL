@@ -205,7 +205,6 @@ class Runner(AbstractEnvRunner):
                 if maybeepinfo: epinfos.append(maybeepinfo)
             mb_rewards.append(rewards)
 
-
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
@@ -261,26 +260,22 @@ def save_params(sess):
     return ps
 
 # save model params with base_name and mean reward(10)
-def save_model(sess,datapoints=None,base_name=None,i=0):
+def save_model(sess,datapoints=None,base_name=None):
     base_dict = {}
     if datapoints is not None:
         base_dict['datapoints']= datapoints
 
     # sess, scopes, filename, base_dict=None
-    if base_name is None:
-        base_name = str(i)
-    else:
-        base_name = base_name + "_" + str(i)
     utils.save_params_in_scopes(sess, ['model'], Config.get_save_file(base_name=base_name), base_dict)
 
-def load_model(sess,base_name=None,i=0):
-    if base_name is None:
-        base_name = str(i)
-    else:
-        base_name= base_name + "_" + str(i)
+def load_model(sess,base_name=None):
     filename = Config.get_save_file(base_name=base_name)
-    utils.load_params_for_scope(sess, 'model',load_path=filename, load_key='default' )
-
+    is_loaded = utils.load_params_for_scope(sess, 'model',load_path=filename, load_key='default' )
+    #datapoints = utils.load_datapoints(load_path=filename)
+    if is_loaded:
+        return filename
+    else:
+        return is_loaded
 
 def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
@@ -325,7 +320,9 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
     if index > 0:
         #load_path = Config.get_save_file(i=index-1)
         #utils.load_params_for_scope(sess,'model',load_path=load_path,load_key="default")
-        load_model(sess,base_name=None,i=index-1)
+        datapoints = load_model(sess,base_name=None)
+    else:
+        datapoints = []
 
     # run rollout in env
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
@@ -339,13 +336,13 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
     # total update times
     nupdates = total_timesteps//nbatch
     mean_rewards = []
-    datapoints = []
+    # datapoints = []
 
     run_t_total = 0
     train_t_total = 0
 
     can_save = True
-    checkpoints = [i for i in range(0,32,4)] # every 4M
+    checkpoints = [i for i in range(0,256,4)] # every 8M
     saved_key_checkpoints = [False] * len(checkpoints)
 
     # not rank = 0 don't need save
@@ -363,7 +360,6 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
         lrnow = lr(frac)
         cliprangenow = cliprange(frac)
 
-        #mpi_print('collecting rollouts...')
         run_tstart = time.time()
 
         # rollout
@@ -373,11 +369,9 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         run_elapsed = time.time() - run_tstart
         run_t_total += run_elapsed
-        #mpi_print('rollouts complete')
 
         mblossvals = []
 
-        #mpi_print('updating parameters...')
         train_tstart = time.time()
 
         if states is None: # nonrecurrent version
@@ -420,6 +414,7 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
         if update % log_interval == 0 or update == 1:
             # step elapsed (each length is fixed in PPO)
             step = update*nbatch
+            step_elapsed = step + start_timesteps
             rew_mean_100 = utils.process_ep_buf(
                 active_ep_buf,
                 tb_writer=tb_writer,
@@ -432,12 +427,11 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
             mpi_print('\n-----', update, '-----')
 
             mean_rewards.append(rew_mean_100)
-            datapoints.append([step, rew_mean_100])
 
             wandb.tensorflow.log(tf.summary.merge_all())
             wandb.log({
                 'Time_elapsed':tnow - tfirststart,
-                'Step_elapsed':step + start_timesteps,
+                'Step_elapsed':step_elapsed,
                 'Eplen_mean':ep_len_mean_100,
                 'Succ_rate':success_rate_train,
                 'Rew_mean':rew_mean_100,
@@ -455,11 +449,11 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
             tb_writer.log_scalar(ep_len_mean_100, 'ep_len_mean')
             tb_writer.log_scalar(fps, 'fps')
 
-            mpi_print('time_elapsed'.ljust(25), tnow - tfirststart)
-            mpi_print('step_elapsed'.ljust(25), step + start_timesteps)
+            mpi_print('step_elapsed'.ljust(25), step_elapsed)
+            mpi_print('time_epi'.ljust(25), tnow - tfirststart)
             mpi_print('time_run'.ljust(25), run_t_total)
             mpi_print('time_train'.ljust(25), train_t_total)
-            mpi_print('epi_len / total_timesteps'.ljust(25), update*nsteps, total_timesteps)
+            mpi_print('len_epi / total_timesteps'.ljust(25), update*nsteps, total_timesteps)
 
             mpi_print('epi mean len'.ljust(25), ep_len_mean_100)
             mpi_print('epi mean rew'.ljust(25), rew_mean_100)
@@ -467,6 +461,8 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
             mpi_print('fps', fps)
             mpi_print('now_timesteps', step)
+
+            datapoints.append([step_elapsed, rew_mean_100])
             # lastest 10 episode info
             if len(epinfobuf10) >= 0:
                 mpi_print('epi_info',[epinfo['r'] for epinfo in epinfobuf10])
@@ -482,14 +478,12 @@ def learn(*,sess, policy, env, nsteps, total_timesteps, ent_coef, lr,
         # save models every si updates on rank 0 cpu as 'checkpointM'
         if can_save:
             if save_interval and (update % save_interval == 0):
-                save_model(sess,datapoints,None,index)
+                save_model(sess,datapoints,None)
 
             for j, checkpoint in enumerate(checkpoints):
-                if (not saved_key_checkpoints[j]) and (step >= (checkpoint * 1e6)):
+                if (not saved_key_checkpoints[j]) and (step_elapsed >= (checkpoint * 1e6)):
                     saved_key_checkpoints[j] = True
-                    save_model(sess,datapoints,str(checkpoint) + 'M',index)
-                    act_model = model.train_model
+                    save_model(sess,datapoints,str(checkpoint) + 'M')
 
-    save_model(sess,datapoints,None,index)
-    act_model = model.train_model
-    return mean_rewards, act_model
+    save_model(sess,datapoints,None)
+    return mean_rewards,datapoints

@@ -97,8 +97,8 @@ const int MAX_MAZE_DIFFICULTY = 4;
 
 bool USE_LEVEL_SET = false;
 int NUM_LEVELS = 0;
-int *LEVEL_SEEDS;
-int LEVEL_SEED;
+int* LEVEL_SEEDS;
+int LEVEL_SEED = 0;
 
 bool RANDOM_TILE_COLORS = false;
 bool PAINT_VEL_INFO = false;
@@ -1468,7 +1468,7 @@ void state_reset(const std::shared_ptr<State>& state, int game_type)
 
   if (USE_LEVEL_SET) {
     int level_index = global_rand_gen.randint(0, NUM_LEVELS);
-    level_seed = LEVEL_SEEDS[level_index];
+    level_seed = *(LEVEL_SEEDS + level_index);
     LEVEL_SEED = level_seed;
   } else {
     //level_seed = global_rand_gen.randint();
@@ -1830,6 +1830,8 @@ int get_RES_H()  { return RES_H; }
 int get_VIDEORES()  { return VIDEORES; }
 
 // ======== self-defined ============
+int get_NUM_LEVELS(int index) { return NUM_LEVELS; }
+int get_LEVEL_SEEDS(int index) { return *(LEVEL_SEEDS + index); }
 int get_LEVEL_SEED() { return LEVEL_SEED; }
 int get_DIFFCULTY() { return DIFFCULTY; }
 float params[5] = {GRAVITY,AIR_CONTROL,MAX_JUMP,MAX_SPEED,MIX_RATE}; 
@@ -1864,16 +1866,23 @@ void initialize_args(int *int_args) {
   global_rand_gen.seed(rand_seed);
 }
 
+void initialize_num(int n){
+    NUM_LEVELS = n;
+}
+
 void initialize_set_seeds(int *seeds){
     USE_LEVEL_SET = true;
+    
+    LEVEL_SEEDS = new int[NUM_LEVELS];
     for (int i = 0; i < NUM_LEVELS; i++){
-        LEVEL_SEEDS[i] = seeds[i];
+      LEVEL_SEEDS[i] = seeds[i];
     }
 }
 
 void initialize_seed(int seed){
     USE_LEVEL_SET = false;
     LEVEL_SEED = seed;
+    LEVEL_SEEDS[0] = seed;
 }
 
 void initialize_phys(float *float_args){
