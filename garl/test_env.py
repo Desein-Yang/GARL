@@ -1,3 +1,4 @@
+import garl
 from garl.coinrunenv import make
 import garl.wrappers as wrappers
 from garl.train_agent import setup_and_load

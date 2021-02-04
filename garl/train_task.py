@@ -47,13 +47,14 @@ class SeedOptimizer(TaskOptimizer):
         self.spare_size = spare_size
         self.ini_size = ini_size
         self.rs = np.random.RandomState(rand_seed)
-        seed_set = self.rs.randint(0,2**31-1,self.spare_size + self.ini_size)
-        self.spare_set = set(seed_set[:self.spare_size])
-        self.ini_set = set(seed_set[self.spare_size:])
+        seed_set = self.rs.randint(0,2**31-1,self.spare_size)
+        self.spare_set = set(seed_set[:self.spare_size-self.ini_size])
+        self.ini_set = set(seed_set[self.spare_size-self.ini_size:])
+        self.env.set_seed(self.ini_set)
 
         # all used seed set
         self.train_set_hist = set(seed_set)
-        self.train_set_size = self.size
+        self.train_set_size = self.ini_size
         self.train_set_limit = train_set_limit
 
         # If use diversity, phi = 0
@@ -64,6 +65,10 @@ class SeedOptimizer(TaskOptimizer):
         self.if_log = log
         self.logdir = logdir
         self.log()
+
+    def load(self,filename):
+        self.hist = joblib.load(setup_utils.file_to_path(filename))
+        self.train_set_size = len(self.hist[-1])
 
     def calDiv(self,p,vec):
         assert type(p) is float
@@ -82,12 +87,13 @@ class SeedOptimizer(TaskOptimizer):
         fit1 = vec1 + self.phi * div1
         return fit1
 
-    def gen(self,seed_set):
-        for i,seed in enumerate(seed_set):
-            b = np.random.choice(list(self.spare_set))
-            if b not in seed_set:
-                seed_set[i] = b
-        return seed_set
+    def gen(self,pop_size=1):
+        child = np.random.choice(
+                    list(self.spare_set),
+                    pop_size
+                )
+
+        return child
 
     def replace(self,sess):
         last_set = list(self.env.get_seed())
@@ -147,40 +153,54 @@ class SeedOptimizer(TaskOptimizer):
         """If new level is  more difficult than average difficulty, add it
         until add 50% * now set size"""
         last_set = list(self.env.get_seed())
-        curr_set = self.gen(last_set)
+        curr_set = self.gen(len(last_set))
         curr_set_rew = self.eval(sess,curr_set,self.rep)
         curr_fit = self.calFit(curr_set_rew)
 
         next_set = last_set.copy()
-        count = 0
 
-        for idx,fit in enumerate(curr_fit):
-            if fit < self.train_rew:
+        # Rank
+        def should_add():
+            print(curr_fit[idx],self.train_rew)
+            if curr_fit[idx] > self.train_rew:
+                return False
+            if len(next_set) >= (1+ratio)*len(last_set):
+                return False
+            if len(next_set) >= self.train_set_limit:
+                return False
+
+            return True
+
+        for i,idx in enumerate(np.argsort(curr_fit)):
+            if should_add():
                 next_set.append(curr_set[idx])
-                count += 1
-            if count > ratio * len(last_set):
-                break
+                self.spare_set.remove(curr_set[idx])
 
-        self.train_set_hist = next_set
-        if len(next_set) > self.train_set_limit:
-            next_set = next_set[:self.train_set_limit]
+        self.train_set_hist = set(next_set)
         self.train_set_size = len(self.train_set_hist)
         self.step_elapsed += self.eval_steps
         self.log()
 
         return next_set
 
-    def log(self):
-        if self.if_log:
-            wandb.log({
-                'step_elapsed':self.step_elapsed,
-                'iter':self.iter,
-                'eval_steps':self.eval_steps,
-                'train_set_size':self.train_set_size,
-            })
+    def load(self):
+        opt_hist = joblib.load(setup_utils.file_to_path('opt_hist'))
+        for key in opt_hist.keys():
+            setattr(self,key,opt_hist[key])
 
-        idx = int(self.step_elapsed // 1e6)
-        joblib.dump(self.hist, self.logdir + "opt_hist"+str(idx)+'M')
+    def log(self):
+        opt_hist = {
+            'step_elapsed':self.step_elapsed,
+            'iter':self.iter,
+            'eval_steps':self.eval_steps,
+            'train_set_size':self.train_set_size,
+            'hist':self.hist
+        }
+        if self.if_log:
+            wandb.log(opt_hist)
+
+        #idx = int(self.step_elapsed // 1e6)
+        joblib.dump(opt_hist, self.logdir + "opt_hist")
 
     def eval(self,sess,env_set,rep):
         nenv = self.env.num_envs
@@ -190,36 +210,39 @@ class SeedOptimizer(TaskOptimizer):
 
         return scores
 
+    def should_opt(self):
+        if self.train_set_size >= self.train_set_limit:
+            return False
+        elif self.eval_steps >= self.eval_limit:
+            return False
+
+        return True
+
     def run(self,sess,env,step_elapsed,train_rew,mode='add'):
         self.env = env
+        next_set = self.env.get_seed()
         self.eval_steps = 0
         self.step_elapsed = step_elapsed
         self.train_rew = train_rew
 
-        if self.train_set_size >= self.train_set_limit:
-            should_continue = False
-        else:
-            should_continue = True
         # Optimizen until eval limit reach
-        while(should_continue):
+        while(self.should_opt()):
             if mode == 'replace':
                 next_set = self.replace(sess)
+                self.env.set_seed(next_set)
             elif mode == 'select':
                 next_set = self.select(sess,ratio=0.5)
+                self.env.set_seed(next_set)
             elif mode =='add':
                 next_set = self.add(sess,ratio=0.2)
-                should_continue = False
+                self.env.set_seed(next_set)
+                break
             else:
                 raise ValueError
 
-            self.env.set_seed(next_set)
-
-            if (self.eval_steps > self.eval_limit
-            or self.train_set_size >= self.train_set_limit):
-                should_continue = False
+        next_set = self.env.get_seed()
 
         # Output nextset to be trained on
-        self.env.set_seed(next_set)
         self.hist.append(next_set)
         mpi_print("set new seed",next_set)
         self.iter += 1

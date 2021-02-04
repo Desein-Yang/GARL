@@ -99,6 +99,7 @@ bool USE_LEVEL_SET = false;
 int NUM_LEVELS = 0;
 int* LEVEL_SEEDS;
 int LEVEL_SEED = 0;
+int* SEED_SEQ;
 
 bool RANDOM_TILE_COLORS = false;
 bool PAINT_VEL_INFO = false;
@@ -1469,11 +1470,12 @@ void state_reset(const std::shared_ptr<State>& state, int game_type)
   if (USE_LEVEL_SET) {
     int level_index = global_rand_gen.randint(0, NUM_LEVELS);
     level_seed = *(LEVEL_SEEDS + level_index);
-    LEVEL_SEED = level_seed;
-  } else {
+  } 
+  //else {
     //level_seed = global_rand_gen.randint();
-    level_seed = LEVEL_SEED;
-  }
+    // self-defined seed, GARL modified
+    //level_seed = LEVEL_SEEDs[0];
+  //}
 
   RandomMazeGenerator maze_gen;
   maze_gen.rand_gen.seed(level_seed);
@@ -1510,6 +1512,9 @@ void state_reset(const std::shared_ptr<State>& state, int game_type)
 
   state->maze->is_terminated = false;
   state->time = 0;
+
+  // Hash Table, GARL modified 
+  // return level_seed;
 }
 
 // -- render --
@@ -1792,6 +1797,9 @@ void stepping_thread(int n)
 
       if (game_over) {
         state_reset(todo_state, belongs_to->game_type);
+        // GARL modifed
+        // int level_seed = state_reset(todo_state, belongs_to->game_type);
+        
       }
 
       paint_render_buf(a.render_buf, RES_W, RES_H, todo_state, &a, false, false);
@@ -1830,10 +1838,20 @@ int get_RES_H()  { return RES_H; }
 int get_VIDEORES()  { return VIDEORES; }
 
 // ======== self-defined ============
-int get_NUM_LEVELS(int index) { return NUM_LEVELS; }
-int get_LEVEL_SEEDS(int index) { return *(LEVEL_SEEDS + index); }
-int get_LEVEL_SEED() { return LEVEL_SEED; }
-int get_DIFFCULTY() { return DIFFCULTY; }
+int get_NUM_LEVELS() { return NUM_LEVELS; }
+int get_LEVEL_SEEDS(int index) {
+    return *(LEVEL_SEEDS + index); 
+}
+int get_LEVEL_SEED() {
+    return LEVEL_SEED; 
+}
+int get_SEED_SEQ(int index) 
+{ 
+    return *(SEED_SEQ + index); 
+}
+int get_DIFFCULTY() { 
+    return DIFFCULTY; 
+}
 float params[5] = {GRAVITY,AIR_CONTROL,MAX_JUMP,MAX_SPEED,MIX_RATE}; 
 float* get_PHYC_PARAM() { return  params; }
 
@@ -1871,7 +1889,7 @@ void initialize_num(int n){
 }
 
 void initialize_set_seeds(int *seeds){
-    USE_LEVEL_SET = true;
+    //USE_LEVEL_SET = true;
     
     LEVEL_SEEDS = new int[NUM_LEVELS];
     for (int i = 0; i < NUM_LEVELS; i++){
@@ -1881,6 +1899,7 @@ void initialize_set_seeds(int *seeds){
 
 void initialize_seed(int seed){
     USE_LEVEL_SET = false;
+    
     LEVEL_SEED = seed;
     LEVEL_SEEDS[0] = seed;
 }
@@ -1935,10 +1954,13 @@ int vec_create(int game_type, int nenvs, int lump_n, bool want_hires, float defa
   vstate->states.resize(nenvs);
   vstate->game_type = game_type;
 
+  //SEED_SEQ = new int[nenvs];
+
   for (int n = 0; n < nenvs; n++) {
     vstate->states[n] = std::shared_ptr<State>(new State(vstate));
     vstate->states[n]->state_n = n;
     state_reset(vstate->states[n], vstate->game_type);
+    // SEED_SEQ[n] = state_reset(vstate->states[n], vstate->game_type);
     vstate->states[n]->agent_ready = false;
     vstate->states[n]->agent.zoom = default_zoom;
     vstate->states[n]->agent.target_zoom = default_zoom;

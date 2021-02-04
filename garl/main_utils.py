@@ -86,6 +86,7 @@ def load_params_for_scope(sess, scope, load_key='default',load_path = None):
         load_data = Config.get_load_data(load_key)
     else:
         load_path = file_to_path(load_path)
+        print('Load file',load_path)
         if os.path.exists(load_path):
             load_data = joblib.load(load_path)
             print('Load file',load_path)
@@ -98,7 +99,9 @@ def load_params_for_scope(sess, scope, load_key='default',load_path = None):
     if scope in params_dict:
         print('Loading saved file for scope', scope)
         loaded_params = params_dict[scope]
-        loaded_params, params = get_savable_params(loaded_params, scope, keep_heads=True)
+        loaded_params, params = get_savable_params(
+            loaded_params, scope, keep_heads=True
+        )
         restore_params(sess, loaded_params, params)
 
     return True
@@ -108,9 +111,7 @@ def get_savable_params(loaded_params, scope, keep_heads=False):
     filtered_params = []
     filtered_loaded = []
 
-    if len(loaded_params) != len(params):
-        print('param mismatch', len(loaded_params), len(params))
-        assert(False)
+    assert len(loaded_params) == len(params),'param mismatch'
 
     for p, loaded_p in zip(params, loaded_params):
         keep = True

@@ -65,7 +65,13 @@ class EpisodeRewardWrapper(gym.Wrapper):
 
             for i, d in enumerate(done):
                 if d:
-                    epinfo = {'r': round(self.rewards[i], 6), 'l': self.lengths[i], 't': 0}
+                    epinfo = {
+                        'r': round(self.rewards[i], 6),
+                        'l': self.lengths[i],
+                        't': 0,
+                        # Hash Table: GARL modified
+                        #'s': self.get_cur_seed()[i]
+                    }
                     aux_dict = {}
 
                     for nr in range(self.num_aux_rews):
@@ -181,6 +187,18 @@ class RandSeedWrapper(gym.Wrapper):
         self.hist = set(self.ini_set)
         self.cur_set = self.ini_set
         self.set_seed(self.ini_set)
+
+class HashTableWrapper(gym.Wrapper):
+    def __init__(self,env):
+        """Add a hashtable to record rews and steps of specific seed.
+        Should use with (and after) RandSeed and EpisodeReward Wrapper"""
+        pass
+
+    def get_hash(self,seed):
+        pass
+
+    def add_hash(self,seed):
+        pass
 
 
 # back 20200128

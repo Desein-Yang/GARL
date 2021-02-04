@@ -4,7 +4,6 @@
 
 This is code for GAenerative Adversarial Reinforment Leanring Framework on the environments Coinrun along with example scripts.
 
-[Quantifying Generalization in Reinforcement Learning](https://drive.google.com/file/d/1U1-uufB_ZzQ1HG67BhW9bB8mTJ6JtS19/view).
 Authors: Qi Yang, Peng Yang, Ke Tang
 
 ![CoinRun](coinrun.png?raw=true "CoinRun")
@@ -21,7 +20,7 @@ apt-get install mpich build-essential qt5-default pkg-config
 # Mac
 brew install qt open-mpi pkg-config
 
-git clone https://github.com/openai/coinrun.git
+git clone https://github.com/Desein-Yang/GARL.git
 cd coinrun
 pip install tensorflow==1.12.0  # or tensorflow-gpu
 pip install -r requirements.txt

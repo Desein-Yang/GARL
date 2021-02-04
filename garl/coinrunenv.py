@@ -17,6 +17,7 @@ import gym
 import gym.spaces
 import numpy as np
 import numpy.ctypeslib as npct
+import garl
 from baselines.common.vec_env import VecEnv
 from baselines import logger
 
@@ -65,7 +66,9 @@ lib.get_RES_W.restype = c_int
 lib.get_RES_H.restype = c_int
 lib.get_VIDEORES.restype = c_int
 lib.get_NUM_LEVELS.restype = c_int
+lib.get_LEVEL_SEED.restype = c_int
 lib.get_LEVEL_SEEDS.restype = c_int
+lib.get_SEED_SEQ.restype = c_int
 
 lib.vec_create.argtypes = [
    c_int,    # game_type
@@ -83,7 +86,6 @@ lib.vec_step_async_discrete.argtypes = [c_int, npct.ndpointer(dtype=np.int32, nd
 lib.initialize_args.argtypes = [npct.ndpointer(dtype=np.int32, ndim=1)]
 lib.initialize_set_seeds.argtypes = [npct.ndpointer(dtype=np.int32, ndim=1)]
 lib.initialize_num.argtypes = [c_int]
-lib.initialize_seed.argtypes = [c_int]
 lib.initialize_diff.argtypes = [c_int]
 lib.initialize_phys.argtypes = [npct.ndpointer(dtype=np.float, ndim=1)]
 lib.initialize_set_monitor_dir.argtypes = [c_char_p, c_int]
@@ -164,19 +166,21 @@ def initialize_seed(level_seed=None):
        All env in Vec shared a same seed.
     """
     assert level_seed is not None
-    if len(level_seed) == 0:
-        assert Config.SET_SEED != -1,"set seed should not be -1"
-        rs = np.random.RandomState(Config.SET_SEED)
-        level_seed = rs.randint(0,2**31-1,Config.INI_LEVELS)
-
     if type(level_seed) is int:
         level_seed = [level_seed]
+
+    elif type(level_seed) is list:
+        if len(level_seed) == 0:
+            assert Config.SET_SEED != -1,"set seed should not be -1"
+            rs = np.random.RandomState(Config.SET_SEED)
+            level_seed = rs.randint(0,2**31-1,Config.INI_LEVELS)
+        else:
+            level_seed = list(set(level_seed))
+
     level_seed = np.array(level_seed).astype(np.int32)
     lib.initialize_num(len(level_seed))
-    if len(level_seed) == 1:
-        lib.initialize_seed(level_seed)
-    else:
-        lib.initialize_set_seeds(level_seed)
+    print("initialize seed:level_seed",level_seed)
+    lib.initialize_set_seeds(level_seed)
 
 
 def initialize_theme():
@@ -242,12 +246,23 @@ class CoinRunVecEnv(VecEnv):
         # next env(after state_reset()) will work
         initialize_seed(seed)
 
+    def get_num_levels(self):
+        return lib.get_NUM_LEVELS()
+
     def get_seed(self):
-        """get current level seed in cpp"""
-        num_levels = lib.get_NUM_LEVELS()
+        """get current level seed-set in cpp"""
+        num_levels = self.get_num_levels()
+
         seed = [0] * num_levels
         for i in range(num_levels):
             seed[i] = lib.get_LEVEL_SEEDS(i)
+        return seed
+
+    def get_cur_seed(self):
+        """get seed sequence of a vector level"""
+        seed = [0] * self.num_envs
+        for i in range(self.num_envs):
+            seed[i] = lib.get_SEED_SEQ(i)
         return seed
 
     def get_phys(self):
@@ -326,7 +341,7 @@ if __name__ == '__main__':
 #        'diffculty':2
 #    }
     seeds = [123,453,345,567,678]
-    env = make('standard', 1, seeds)
+    env = make('standard', 3, seeds)
     env = RandSeedWrapper(env,seeds,len(seeds))
     print('seed',env.get_seed())
     seeds = [123,453,345,567,678,890]
@@ -334,6 +349,7 @@ if __name__ == '__main__':
     print('seed2',env.get_seed())
     env.set_seed(465)
     print('seed3',env.get_seed())
+    print('seed4',env.get_cur_seed())
     act = np.array([env.action_space.sample()])
     env.step(act)
 

@@ -17,7 +17,6 @@ def restore_file(restore_id,base_name=None,overlap_config=None,load_key='default
         load_data = joblib.load(filepath)
 
         Config.set_load_data(load_data, load_key=load_key)
-
         restored_args = load_data['args']
         sub_dict = {}
         res_keys = Config.RES_KEYS

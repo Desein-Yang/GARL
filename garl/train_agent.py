@@ -11,6 +11,7 @@ import time
 from mpi4py import MPI
 import tensorflow as tf
 import wandb
+import joblib
 from baselines.common import set_global_seeds
 from baselines.common.vec_env.vec_frame_stack import VecFrameStack
 
@@ -18,7 +19,7 @@ import numpy as np
 import garl.main_utils as utils
 from garl import setup_utils, policies_back, wrappers, ppo2
 from garl.config import Config
-from garl.coinrunenv import setup_and_load
+from garl.setup_utils import setup_and_load
 from garl.eval import eval_test, eval_set
 from garl.train_task import TaskOptimizer, SeedOptimizer
 mpi_print = utils.mpi_print
@@ -97,29 +98,44 @@ def main():
         utils.mpi_print('Set up policy')
 
         optimizer = SeedOptimizer(env=env,logdir=Config.LOGDIR,
-                                  rand_seed = seed,
                                   spare_size = Config.SPA_LEVELS,
                                   ini_size = Config.INI_LEVELS,
-                                  rep=3,eval_limit=phase_eval_limit,log=True)
+                                  eval_limit = phase_eval_limit,
+                                  rand_seed = seed,rep=3, log=True)
 
         step_elapsed = 0
-        for t in range(Config.TRAIN_ITER):
+        t = 0
+
+        if args.restore_id is not None:
+            datapoints = Config.get_load_data('default')['datapoints']
+            step_elapsed = datapoints[-1][0]
+            optimizer.load()
+            seed = optimizer.hist[-1]
+            env.set_seed(seed)
+            t = 16
+            print('loadrestore')
+            Config.RESTORE_ID = Config.get_load_data('default')['args']['run_id']
+            Config.RUN_ID = Config.get_load_data('default')['args']['run_id'].replace('-','_')
+
+        while(step_elapsed < Config.TOTAL_STEP*10**6):
         # ============ GARL =================
             # optimize policy
             mean_rewards, datapoints = learn_func(sess=sess,policy=policy,env=env,
-                                      log_interval=args.log_interval,
-                                      save_interval=args.save_interval,
-                                      nsteps=Config.NUM_STEPS,
-                                      nminibatches=Config.NUM_MINIBATCHES,
-                                      lam=Config.GAE_LAMBDA,gamma=Config.GAMMA,
-                                      noptepochs=Config.PPO_EPOCHS,
-                                      ent_coef=Config.ENTROPY_COEFF,
-                                      vf_coef=Config.VF_COEFF,
-                                      max_grad_norm=Config.MAX_GRAD_NORM,
-                                      lr=lambda f : f * Config.LEARNING_RATE,
-                                      cliprange=lambda f : f * Config.CLIP_RANGE,
-                                      start_timesteps = step_elapsed,
-                                      total_timesteps = phase_timesteps,index = t)
+                                                  log_interval=args.log_interval,
+                                                  save_interval=args.save_interval,
+                                                  nsteps=Config.NUM_STEPS,
+                                                  nminibatches=Config.NUM_MINIBATCHES,
+                                                  lam=Config.GAE_LAMBDA,
+                                                  gamma=Config.GAMMA,
+                                                  noptepochs=Config.PPO_EPOCHS,
+                                                  ent_coef=Config.ENTROPY_COEFF,
+                                                  vf_coef=Config.VF_COEFF,
+                                                  max_grad_norm=Config.MAX_GRAD_NORM,
+                                                  lr=lambda f : f * Config.LEARNING_RATE,
+                                                  cliprange=lambda f : f * Config.CLIP_RANGE,
+                                                  start_timesteps = step_elapsed,
+                                                  total_timesteps = phase_timesteps,
+                                                  index = t)
 
             # test catestrophic forgetting
             if 'Forget' in Config.RUN_ID:
@@ -138,27 +154,37 @@ def main():
                     mpi_print("Last scores",np.mean(last_scores),
                               "Curr scores",np.mean(curr_scores))
                     mpi_print("Replace count",len(tmp))
-                    optimizer.save_hist(Config.LOGDIR+'opt_hist')
 
             # optimize env
-            step_elapsed = datapoints[-1][0]
-            env,step_elapsed = optimizer.run(sess,env,step_elapsed,mean_rewards[-1])
+            if t < Config.TRAIN_ITER:
+                step_elapsed = datapoints[-1][0]
+                best_rew_mean = max(mean_rewards)
+                env,step_elapsed = optimizer.run(sess,env,step_elapsed,best_rew_mean)
+            t += 1
 
 
+        final_test = {}
         mpi_print('Step_elapsed',step_elapsed)
         train_set = optimizer.train_set_hist
-        scores, steps, eval_set= eval_test(sess, nenv, train_set,train=True,
-                                    is_high=False,rep_count=1000,log=False)
+        scores, steps, eval_set= eval_test(sess, nenv, train_set,
+                                           train=True,is_high=False,
+                                           rep_count=1000,log=False)
         mpi_print('Train_set',eval_set)
         mpi_print('Train_mean',np.mean(scores))
         mpi_print('Train_scores',scores)
+        final_test['Train_set'] = eval_set
+        finale_test['Train_scores'] = scores
+
         scores, steps, eval_set = eval_test(sess, nenv, None,train=False,
-                                        is_high=True,rep_count=1000,log=False)
+                                            is_high=True,rep_count=1000,
+                                            log=False)
         mpi_print('Eval_set',eval_set)
         mpi_print('Test_mean',np.mean(scores))
         mpi_print('Datapoints',datapoints)
         mpi_print('Test_scores',scores)
-
+        final_test['Eval_set'] = eval_set
+        final_test['Test_scores'] = scores
+        joblib.dump(final_test,setup_utils.file_to_path('final_test'))
     env.close()
 
 if __name__ == '__main__':

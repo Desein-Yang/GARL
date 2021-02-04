@@ -12,23 +12,22 @@
 
 import time
 import joblib
+import wandb
+import pickle
 import numpy as np
 import tensorflow as tf
-import wandb
 from collections import deque
-import pickle
 from mpi4py import MPI
-
-from garl.tb_utils import TB_Writer
 import garl.main_utils as utils
 import garl.setup_utils
+
+from garl.tb_utils import TB_Writer
 from garl.config import Config
-
-mpi_print = utils.mpi_print
-
 from baselines.common.runners import AbstractEnvRunner
 from baselines.common.tf_util import initialize
 from baselines.common.mpi_util import sync_from_root
+
+mpi_print = utils.mpi_print
 
 class MpiAdamOptimizer(tf.train.AdamOptimizer):
     """Adam optimizer that averages gradients across mpi processes."""
@@ -36,6 +35,7 @@ class MpiAdamOptimizer(tf.train.AdamOptimizer):
         self.comm = comm
         self.train_frac = 1.0 - Config.get_test_frac()
         tf.train.AdamOptimizer.__init__(self, **kwargs)
+
     def compute_gradients(self, loss, var_list, **kwargs):
         grads_and_vars = tf.train.AdamOptimizer.compute_gradients(self, loss, var_list, **kwargs)
         grads_and_vars = [(g, v) for g, v in grads_and_vars if g is not None]
@@ -263,7 +263,7 @@ def save_params(sess):
 def save_model(sess,datapoints=None,base_name=None):
     base_dict = {}
     if datapoints is not None:
-        base_dict['datapoints']= datapoints
+        base_dict['datapoints'] = datapoints
 
     # sess, scopes, filename, base_dict=None
     utils.save_params_in_scopes(sess, ['model'], Config.get_save_file(base_name=base_name), base_dict)
@@ -278,7 +278,7 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
             total_timesteps, start_timesteps=0,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=100, nminibatches=4, noptepochs=4, cliprange=0.2,
-            save_interval=10, large_bufsize=100, index=0, load_path=None):
+            save_interval=10, large_bufsize=100, index=0):
     """train ppo agent"""
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
@@ -316,10 +316,16 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
                   max_grad_norm=max_grad_norm,index=index)
 
     # if load_path is not none will load params
-    if index > 0:
-        datapoints = load_model(sess,base_name=None)
+    if index == 0 :
+        datapoints = [[start_timesteps, 0.0]]
+        mean_rewards = [0.0]
     else:
-        datapoints = []
+        # load sav_runid_0
+        datapoints = load_model(sess,base_name='Best')
+        mean_rewards = [datapoints[-1][1]]
+    if Config.VERSION == 6:
+        best_rew_mean  = max(mean_rewards)
+        best_succ_rate = max(mean_rewards) / 10
 
     # run rollout in env
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
@@ -332,7 +338,6 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
 
     # total update times
     nupdates = total_timesteps//nbatch
-    mean_rewards = [0.0]
     update = 1
     # datapoints = []
 
@@ -342,13 +347,12 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
     can_save = True
     #checkpoints = [i for i in range(0,256,4)] # every 8M
     #saved_key_checkpoints = [False] * len(checkpoints)
-
     # not rank = 0 don't need save
     if Config.SYNC_FROM_ROOT and rank != 0:
         can_save = False
 
-    while(should_continue):
-    #for update in range(1, nupdates+1):
+    #while(should_continue):
+    for update in range(1, nupdates+1):
         # n batch
         assert nbatch % nminibatches == 0
         nbatch_train = nbatch // nminibatches
@@ -370,7 +374,6 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
         run_t_total += run_elapsed
 
         mblossvals = []
-
         train_tstart = time.time()
 
         if states is None: # nonrecurrent version
@@ -403,7 +406,6 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
 
         train_elapsed = time.time() - train_tstart
         train_t_total += train_elapsed
-        #mpi_print('update complete')
 
         lossvals = np.mean(mblossvals, axis=0)
         tnow = time.time()
@@ -420,12 +422,7 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
                 suffix='',
                 step=step
             )
-            # if converge, now threshod is 0.1
-            delta = (rew_mean_100 - mean_rewards[-1]) / 10
-            if (delta < Config.THRES_HOLD
-                and delta > 0
-                and index < Config.TRAIN_ITER):
-                should_continue = False
+
             mean_rewards.append(rew_mean_100)
             datapoints.append([step_elapsed, rew_mean_100])
 
@@ -449,20 +446,31 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
                 'rew_mean':rew_mean_100,
                 'fps':fps
             })
-            best_rew_mean, best_succ_rate = 0,0
             if best_rew_mean < rew_mean_100:
                 wandb.run.summary["best_rew_mean"] = rew_mean_100
                 wandb.run.summary["best_succ_rate"] = success_rate_train
                 best_rew_mean = rew_mean_100
                 best_succ_rate= success_rate_train
+                if Config.VERSION == 6:
+                    save_model(sess,datapoints,'Best')
+
+            # Terminal condition
+            # if converge, now threshod is 0.1
+            if Config.VERSION == 5:
+                delta = (rew_mean_100 - mean_rewards[-1]) / 10
+                if (delta < Config.THRES_HOLD
+                    and delta > 0
+                    and index < Config.TRAIN_ITER):
+                    should_continue = False
+
             #data = [[x, y] for (x, y) in zip(x_values, y_values)]
             #table = wandb.Table(data=data, columns = ["frames", "rewards_train"])
             #wandb.plot.line()
-            tb_writer.log_scalar(ep_len_mean_100, 'ep_len_mean')
-            tb_writer.log_scalar(fps, 'fps')
+            #tb_writer.log_scalar(ep_len_mean_100, 'ep_len_mean')
+            #tb_writer.log_scalar(fps, 'fps')
 
             mpi_print('step_elapsed / total_timesteps'.ljust(25),
-                      step_elapsed,' / ', total_timesteps)
+                      step_elapsed,' / ', Config.TOTAL_STEP * 10**6 )
             mpi_print('time_epi'.ljust(25), tnow - tfirststart)
             mpi_print('time_run'.ljust(25), run_t_total)
             mpi_print('time_train'.ljust(25), train_t_total)
@@ -483,7 +491,7 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
                 for (lossval, lossname) in zip(lossvals, model.loss_names):
                     mpi_print(lossname, lossval)
                     wandb.log({lossname:lossval})
-                    tb_writer.log_scalar(lossval, lossname)
+                    #tb_writer.log_scalar(lossval, lossname)
             mpi_print('-----------\n')
 
             # save models every si updates on rank 0 cpu as 'checkpointM'

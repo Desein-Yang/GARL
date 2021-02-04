@@ -168,7 +168,7 @@ class ConfigSingle(object):
         # op = 1: use evaluate perf as diff
         # op = 2: use value diff as diff
         # op = 3: use picture similarity
-
+        evo_keys.append(('version','version', int,6))
 
         # RES_KEY restore rest setting keys(when type key >5,bool key >3)
         self.RES_KEYS = []
