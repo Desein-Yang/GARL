@@ -31,6 +31,7 @@ class EpisodeRewardWrapper(gym.Wrapper):
 
         self.aux_rewards = None
         self.num_aux_rews = None
+        self.obs_list = []
 
         def reset(**kwargs):
             self.rewards = np.zeros(nenvs)
@@ -38,10 +39,20 @@ class EpisodeRewardWrapper(gym.Wrapper):
             self.aux_rewards = None
             self.long_aux_rewards = None
 
+            self.obs_list = []
+
             return self.env.reset(**kwargs)
 
         def step(action):
             obs, rew, done, infos = self.env.step(action)
+
+            # GARL save image modification
+            if np.shape(obs)[-1] % 3 == 0:
+                ob_frame = obs[0,:,:,-3:]
+            else:
+                ob_frame = obs[0,:,:,-1]
+                ob_frame = np.stack([ob_frame] * 3, axis=2)
+            self.obs_list.append(ob_frame)
 
             if self.aux_rewards is None:
                 info = infos[0]
@@ -70,7 +81,7 @@ class EpisodeRewardWrapper(gym.Wrapper):
                         'l': self.lengths[i],
                         't': 0,
                         # Hash Table: GARL modified
-                        #'s': self.get_cur_seed()[i]
+                        's': self.get_cur_seed()[i]
                     }
                     aux_dict = {}
 
@@ -98,8 +109,17 @@ class EpisodeRewardWrapper(gym.Wrapper):
 
             return obs, rew, done, infos
 
+        def exportmp4(filepath):
+            from moivepy.editor import ImageSequenceClip
+
+            clip = ImageSequenceClip(obs_list, fps=24)
+            clip.write_videofile(filepath, fps=24)
+
+
         self.reset = reset
         self.step = step
+        self.export = exportmp4
+
 
 # ========= self defined =================
 
@@ -114,6 +134,36 @@ def add_mutate_wrappers(env):
         return ParamWrapper(env)
     elif Config.MU_OP == 3:
         return RandConvWrapper(env)
+
+# discard, add into Episoderewardwrapper
+class SaveImage(gym.Wrapper):
+    def __init__(self,env):
+        self.obs_list = []
+        self.env = env
+
+    def step(self,action):
+        obs, rew, done, infos = self.env.step(action)
+        if np.shape(obs)[-1] % 3 == 0:
+            ob_frame = obs[0,:,:,-3:]
+        else:
+            ob_frame = obs[0,:,:,-1]
+            ob_frame = np.stack([ob_frame] * 3, axis=2)
+
+        self.obs_list.append(ob_frame)
+
+        return obs,rews,dones, infos
+
+    def reset(self):
+        self.obs_list = []
+        obs = self.env.reset()
+        return obs
+
+    def export(self,filepath):
+        from moivepy.editor import ImageSequenceClip
+
+        clip = ImageSequenceClip(obs_list, fps=24)
+        clip.write_videofile(filepath, fps=24)
+        return True
 
 class ParamWrapper(gym.Wrapper):
     def __init__(self,env,args,seed):
@@ -171,91 +221,30 @@ class RandSeedWrapper(gym.Wrapper):
         self.hist = self.hist.union(set(a))
         self.env.set_seed(self.cur_set)
 
-    def set_seed(self,seed):
+    def set_seed(self,seed,w=None):
+        """if weight is not assigned,
+        we will generated one uniform weight
+        in coinrunenv.py"""
         if seed is None:
             seed = []
         elif type(seed) is int:
             seed = [seed]
         elif type(seed) is set:
             seed = list(seed)
-        self.env.set_seed(seed)
+        self.env.set_seed(seed,w)
 
     def get_seed(self):
-        return self.env.get_seed()
+        return list(self.env.get_seed()[0])
+
+    def get_weight(self):
+        return list(self.env.get_seed()[1])
 
     def reset_seed(self):
         self.hist = set(self.ini_set)
         self.cur_set = self.ini_set
         self.set_seed(self.ini_set)
 
-class HashTableWrapper(gym.Wrapper):
-    def __init__(self,env):
-        """Add a hashtable to record rews and steps of specific seed.
-        Should use with (and after) RandSeed and EpisodeReward Wrapper"""
-        pass
-
-    def get_hash(self,seed):
-        pass
-
-    def add_hash(self,seed):
-        pass
-
-
-# back 20200128
-class RandSeed2Wrapper(gym.Wrapper):
-    def __init__(self,env,ini_size,spare_size,rand_seed):
-        super(RandSeedWrapper, self).__init__(env)
-        if rand_seed is not None:
-            self.rs = np.random.RandomState(rand_seed)
-        else:
-            self.rs = np.random.RandomState()
-        self.set_size = spare_size
-        if self.set_size > 1:
-            self.mutate_set = set(self.rs.randint(0,2**31-1,self.set_size))
-        self.hist = []
-        self.ini_size = ini_size
-        self.ini_set = set(self.rs.randint(0,2**31-1,self.ini_size))
-        self.set_seed(self.ini_set)
-
-    def replace_seed(self,a):
-        """mutate levels and remove seed a
-        add another seed b from mutate_set"""
-        self.ini_set.remove(a)
-        b = np.random.choice(list(self.mutate_set))
-        #self.mutate_set.remove(b)
-        self.ini_set.add(b)
-        self.hist.append(self.ini_set)
-
-        self.set_seed(self.ini_set)
-        return b
-
-    def add_seed(self,a):
-        if type(a) is int:
-            b = [a]
-        self.ini_set.union(set(b))
-        self.set_seed(self.ini_set)
-
-    def set_ini_set(self,ini_set):
-        self.ini_set = set(ini_set)
-        self.set_seed(self.ini_set)
-
-    def set_seed(self,seed):
-        self.env.set_seed(seed)
-        self.env.reset()
-
-    def get_seed_set(self):
-        return self.ini_set
-
-    def get_seed(self):
-        return self.env.get_seed()
-
-    def reset_seed(self):
-        self.ini_set = set(self.rs.randint(0,2**31-1,self.ini_size))
-        self.mutate_set = self.mutate_set.union(set(self.hist))
-        self.hist = []
-        self.set_seed(self.ini_set)
-
-
+# non-test
 class RandConvWrapper(gym.Wrapper):
     def __init__(self,env,kernel=3,depth=3,rh=0.2,channel=3,seed=None):
         super(RandConvWrapper, self).__init__(env)

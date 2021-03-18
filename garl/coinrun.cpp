@@ -18,7 +18,7 @@ Also includes a mode that creates a window you can interact with using the keybo
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtWidgets/QToolButton>
-#include <QtCore/QDir>
+#include <QtCore/QDir> 
 #include <QtCore/QThread>
 #include <QtCore/QProcess>
 #include <QtCore/QDateTime>
@@ -98,8 +98,10 @@ const int MAX_MAZE_DIFFICULTY = 4;
 bool USE_LEVEL_SET = false;
 int NUM_LEVELS = 0;
 int* LEVEL_SEEDS;
+int* LEVEL_WEIGHTS;
+int MAX;
 int LEVEL_SEED = 0;
-int* SEED_SEQ;
+//int* SEED_SEQ;
 
 bool RANDOM_TILE_COLORS = false;
 bool PAINT_VEL_INFO = false;
@@ -1166,6 +1168,7 @@ struct Agent {
   uint8_t* render_hires_buf = 0;
   bool game_over = false;
   float reward = 0;
+  int seed = 0;// GARL
   float reward_sum = 0;
   bool is_facing_right;
   bool ladder_mode;
@@ -1461,16 +1464,37 @@ struct State {
    bool agent_ready = false;
 };
 
-void state_reset(const std::shared_ptr<State>& state, int game_type)
+
+int state_reset(const std::shared_ptr<State>& state, int game_type)
 {
   assert(player_themesl.size() > 0 && "Please call init(threads) first");
 
   int level_seed = 0;
-
+  
+  // weight sample
   if (USE_LEVEL_SET) {
-    int level_index = global_rand_gen.randint(0, NUM_LEVELS);
-    level_seed = *(LEVEL_SEEDS + level_index);
-  } 
+      int rand = global_rand_gen.randint(0,MAX);
+      //printf("randis%d",rand);
+      if (NUM_LEVELS <= 0){
+        int level_index = global_rand_gen.randint(0, NUM_LEVELS);
+        level_seed = *(LEVEL_SEEDS + level_index);
+      }
+      else{
+        for (int i=0;i<NUM_LEVELS;i++){
+          if (rand < LEVEL_WEIGHTS[i]){
+            int level_index = i;
+            level_seed = *(LEVEL_SEEDS + level_index);
+            break;
+          }
+        }
+      }
+      //level_seed = *(LEVEL_SEEDS + level_index);
+  }
+  // original 
+  //if (USE_LEVEL_SET) {
+  //  int level_index = global_rand_gen.randint(0, NUM_LEVELS);
+  //  level_seed = *(LEVEL_SEEDS + level_index);
+  //} 
   //else {
     //level_seed = global_rand_gen.randint();
     // self-defined seed, GARL modified
@@ -1513,6 +1537,7 @@ void state_reset(const std::shared_ptr<State>& state, int game_type)
   state->maze->is_terminated = false;
   state->time = 0;
 
+  agent.seed = level_seed; // GARL
   // Hash Table, GARL modified 
   // return level_seed;
 }
@@ -1781,9 +1806,10 @@ void stepping_thread(int n)
         continue;
       todo_state->time += 1;
       bool game_over = todo_state->maze->is_terminated;
+      //printf("gane_over%d",game_over);
 
       for (const std::shared_ptr<Monster>& m: todo_state->maze->monsters) {
-        m->step(todo_state->maze);
+        m->step(todo_state->maze); // get close to monster will end
         Agent& a = todo_state->agent;
         if (fabs(m->x - a.x) + fabs(m->y - a.y) < 1.0)
           todo_state->maze->is_terminated = true;  // no effect on agent score
@@ -1798,7 +1824,9 @@ void stepping_thread(int n)
       if (game_over) {
         state_reset(todo_state, belongs_to->game_type);
         // GARL modifed
-        // int level_seed = state_reset(todo_state, belongs_to->game_type);
+        //int level_seed = state_reset(todo_state, belongs_to->game_type);
+        //printf("SEED_SEQ(%d) is %d\n",n,level_seed);
+        //SEED_SEQ[n] = level_seed;
         
       }
 
@@ -1818,6 +1846,7 @@ void stepping_thread(int n)
     wait_for_step_completed.wakeAll();
   }
 }
+
 
 class SteppingThread : public QThread {
 public:
@@ -1842,13 +1871,16 @@ int get_NUM_LEVELS() { return NUM_LEVELS; }
 int get_LEVEL_SEEDS(int index) {
     return *(LEVEL_SEEDS + index); 
 }
+int get_LEVEL_WEIGHTS(int index) {
+    return *(LEVEL_WEIGHTS + index); 
+}
 int get_LEVEL_SEED() {
     return LEVEL_SEED; 
 }
-int get_SEED_SEQ(int index) 
-{ 
-    return *(SEED_SEQ + index); 
-}
+//int get_SEED_SEQ(int index) 
+//{ 
+//    return *(SEED_SEQ + index); 
+//}
 int get_DIFFCULTY() { 
     return DIFFCULTY; 
 }
@@ -1884,17 +1916,21 @@ void initialize_args(int *int_args) {
   global_rand_gen.seed(rand_seed);
 }
 
-void initialize_num(int n){
-    NUM_LEVELS = n;
-}
 
-void initialize_set_seeds(int *seeds){
-    //USE_LEVEL_SET = true;
-    
+void initialize_set_seeds(int *seeds,int *w, int n){
+    USE_LEVEL_SET = true;
+    NUM_LEVELS = n;
+   
     LEVEL_SEEDS = new int[NUM_LEVELS];
-    for (int i = 0; i < NUM_LEVELS; i++){
+    LEVEL_WEIGHTS = new int[NUM_LEVELS];
+    LEVEL_SEEDS[0] = seeds[0];
+    LEVEL_WEIGHTS[0] = w[0];
+
+    for (int i = 1; i < NUM_LEVELS; i++){
       LEVEL_SEEDS[i] = seeds[i];
+      LEVEL_WEIGHTS[i] = LEVEL_WEIGHTS[i-1] + w[i]; 
     }
+    MAX = LEVEL_WEIGHTS[NUM_LEVELS-1];
 }
 
 void initialize_seed(int seed){
@@ -1960,7 +1996,7 @@ int vec_create(int game_type, int nenvs, int lump_n, bool want_hires, float defa
     vstate->states[n] = std::shared_ptr<State>(new State(vstate));
     vstate->states[n]->state_n = n;
     state_reset(vstate->states[n], vstate->game_type);
-    // SEED_SEQ[n] = state_reset(vstate->states[n], vstate->game_type);
+    //SEED_SEQ[n] = state_reset(vstate->states[n], vstate->game_type);
     vstate->states[n]->agent_ready = false;
     vstate->states[n]->agent.zoom = default_zoom;
     vstate->states[n]->agent.target_zoom = default_zoom;
@@ -1995,6 +2031,20 @@ void vec_close(int handle)
   }
 }
 
+// Forcely end maze and agent
+void vec_game_over(int handle){
+    std::shared_ptr<VectorOfStates> vstate = vstate_find(handle); // find vstate[nenvs]
+    for (int e=0; e<vstate->nenvs; e++){
+        std::shared_ptr<State> state = vstate->states[e];
+        state->agent_ready = true;
+        state->maze->is_terminated = true; // end all maze
+        workers_todo.push_back(state);// push into workers to do 
+        // and next is stepping thread
+        
+    }
+    
+}
+
 void vec_step_async_discrete(int handle, int32_t *actions)
 {
   std::shared_ptr<VectorOfStates> vstate = vstate_find(handle);
@@ -2021,7 +2071,8 @@ void vec_wait(
   uint8_t* obs_rgb,
   uint8_t* obs_hires_rgb,
   float* rew,
-  bool* done)
+  bool* done,
+  int* seed)
 {
   std::shared_ptr<VectorOfStates> vstate = vstate_find(handle);
   while (1) {
@@ -2051,6 +2102,7 @@ void vec_wait(
 
     rew[e] = a.reward;
     done[e] = a.game_over;
+    seed[e] = a.seed;
     a.reward = 0;
     a.game_over = false;
   }
@@ -2197,7 +2249,8 @@ public:
     uint8_t bufrgb[RES_W * RES_H * 3];
     float bufrew[1];
     bool bufdone[1];
-    vec_wait(viz->control_handle, bufrgb, 0, bufrew, bufdone);
+    int bufseed[1];// GARL
+    vec_wait(viz->control_handle, bufrgb, 0, bufrew, bufdone, bufseed);
     // fprintf(stderr, "%+0.2f %+0.2f %+0.2f\n", bufvel[0], bufvel[1], bufvel[2]);
   }
 

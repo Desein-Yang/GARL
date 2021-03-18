@@ -21,7 +21,6 @@ from mpi4py import MPI
 import garl.main_utils as utils
 import garl.setup_utils
 
-from garl.tb_utils import TB_Writer
 from garl.config import Config
 from baselines.common.runners import AbstractEnvRunner
 from baselines.common.tf_util import initialize
@@ -270,6 +269,7 @@ def save_model(sess,datapoints=None,base_name=None):
 
 def load_model(sess,base_name=None):
     filename = Config.get_save_file(base_name=base_name)
+    print(filename)
     utils.load_params_for_scope(sess, 'model',load_path=filename, load_key='default' )
     datapoints = utils.load_datapoints(load_path=filename)
     return datapoints
@@ -285,7 +285,6 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
     mpi_size = comm.Get_size()
 
     sess = tf.get_default_session()
-    tb_writer = TB_Writer(sess)
 
     if isinstance(lr, float):
         lr = constfn(lr)
@@ -324,8 +323,10 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
         datapoints = load_model(sess,base_name='Best')
         mean_rewards = [datapoints[-1][1]]
     if Config.VERSION == 6:
-        best_rew_mean  = max(mean_rewards)
-        best_succ_rate = max(mean_rewards) / 10
+        best_rew_mean = 0
+        best_succ_rate = 0
+        #best_rew_mean  = max(mean_rewards)
+        #best_succ_rate = max(mean_rewards) / 10
 
     # run rollout in env
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
@@ -418,7 +419,6 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
             step_elapsed = step + start_timesteps
             rew_mean_100 = utils.process_ep_buf(
                 active_ep_buf,
-                tb_writer=tb_writer,
                 suffix='',
                 step=step
             )
@@ -432,6 +432,7 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
             ep_len_mean_100 = np.nanmean(
                 [epinfo['l'] for epinfo in active_ep_buf]
             )
+
             train_set_size = len(list(env.get_seed()))
 
             mpi_print('\n-----', update, '-----')
@@ -478,6 +479,7 @@ def learn(*,sess, policy, env, nsteps, ent_coef, lr,
                       update*nsteps,' / ', total_timesteps)
             mpi_print('epi mean len'.ljust(25), ep_len_mean_100)
             mpi_print('epi mean rew'.ljust(25), rew_mean_100)
+            #mpi_print('dummy info'.ljust(25), env.env.dummy_info)
             mpi_print('succ rate'.ljust(25), success_rate_train)
             mpi_print('fps', fps)
             mpi_print('now_timesteps', step)

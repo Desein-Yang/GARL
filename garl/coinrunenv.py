@@ -68,7 +68,7 @@ lib.get_VIDEORES.restype = c_int
 lib.get_NUM_LEVELS.restype = c_int
 lib.get_LEVEL_SEED.restype = c_int
 lib.get_LEVEL_SEEDS.restype = c_int
-lib.get_SEED_SEQ.restype = c_int
+#lib.get_SEED_SEQ.restype = c_int
 
 lib.vec_create.argtypes = [
    c_int,    # game_type
@@ -80,12 +80,16 @@ lib.vec_create.argtypes = [
 lib.vec_create.restype = c_int
 
 lib.vec_close.argtypes = [c_int]
+lib.vec_game_over.argtypes = [c_int]
 
 lib.vec_step_async_discrete.argtypes = [c_int, npct.ndpointer(dtype=np.int32, ndim=1)]
 
 lib.initialize_args.argtypes = [npct.ndpointer(dtype=np.int32, ndim=1)]
-lib.initialize_set_seeds.argtypes = [npct.ndpointer(dtype=np.int32, ndim=1)]
-lib.initialize_num.argtypes = [c_int]
+lib.initialize_set_seeds.argtypes = [
+    npct.ndpointer(dtype=np.int32, ndim=1),
+    npct.ndpointer(dtype=np.int32, ndim=1),
+    c_int
+]
 lib.initialize_diff.argtypes = [c_int]
 lib.initialize_phys.argtypes = [npct.ndpointer(dtype=np.float, ndim=1)]
 lib.initialize_set_monitor_dir.argtypes = [c_char_p, c_int]
@@ -96,11 +100,12 @@ lib.vec_wait.argtypes = [
     npct.ndpointer(dtype=np.uint8, ndim=4),    # larger rgb for render()
     npct.ndpointer(dtype=np.float32, ndim=1),  # rew
     npct.ndpointer(dtype=np.bool, ndim=1),     # done
+    npct.ndpointer(dtype=np.int32, ndim=1),     # seed
     ]
 
 already_inited = False
 
-def init_args_and_threads(cpu_count=4,
+def init_args_and_threads(cpu_count=1,
                           monitor_csv_policy='all',
 			  rand_seed=None):
     """
@@ -160,27 +165,32 @@ def initialize_physical(args,diff=True,phys=True):
         int_args = np.array([args["diffculty"]]).astype(np.int)
         lib.initialize_diff(int_args)
 
-def initialize_seed(level_seed=None):
+def initialize_seed(level_seed=None,w=None):
     """Init seed of each level
        Should be before vec_create()
        All env in Vec shared a same seed.
+       if weight is not None use w to weighted sample.
     """
     assert level_seed is not None
     if type(level_seed) is int:
         level_seed = [level_seed]
 
-    elif type(level_seed) is list:
-        if len(level_seed) == 0:
-            assert Config.SET_SEED != -1,"set seed should not be -1"
-            rs = np.random.RandomState(Config.SET_SEED)
-            level_seed = rs.randint(0,2**31-1,Config.INI_LEVELS)
-        else:
-            level_seed = list(set(level_seed))
+    if len(level_seed) == 0:
+        assert Config.SET_SEED != -1,"set seed should not be -1"
+        rs = np.random.RandomState(Config.SET_SEED)
+        level_seed = rs.randint(0,2**31-1,Config.INI_LEVELS)
+
+    if w is not None:
+        assert len(level_seed) == len(w)
+    else:
+        w = np.ones_like(level_seed)
 
     level_seed = np.array(level_seed).astype(np.int32)
-    lib.initialize_num(len(level_seed))
+    w = np.array(w).astype(np.int32)
+
     print("initialize seed:level_seed",level_seed)
-    lib.initialize_set_seeds(level_seed)
+    print("initialize weight:w",w)
+    lib.initialize_set_seeds(level_seed, w, len(level_seed))
 
 
 def initialize_theme():
@@ -214,6 +224,7 @@ class CoinRunVecEnv(VecEnv):
 
         self.buf_rew = np.zeros([num_envs], dtype=np.float32)
         self.buf_done = np.zeros([num_envs], dtype=np.bool)
+        self.buf_seed = np.zeros([num_envs], dtype=np.int32)
         self.buf_rgb   = np.zeros([num_envs, self.RES_H, self.RES_W, 3], dtype=np.uint8)
         self.hires_render = Config.IS_HIGH_RES
         if self.hires_render:
@@ -231,20 +242,23 @@ class CoinRunVecEnv(VecEnv):
             )
         if seed is None:
             seed = []
+        self.default_zoom = default_zoom
+        self.game_type = game_type
+        self.lump_n = lump_n
+        self.num_envs = num_envs
         initialize_seed(seed)
         self.handle = lib.vec_create(
             game_versions[game_type],
             self.num_envs,
-            lump_n,
+            self.lump_n,
             self.hires_render,
             default_zoom)
         self.dummy_info = [{} for _ in range(num_envs)]
 
-    def set_seed(self,seed):
+    def set_seed(self,seed,w=None,num_envs=None):
         """set global variables LEVEL_SEED or LEVEL_SEEDS in cpp"""
-        # current env will use last seed
-        # next env(after state_reset()) will work
-        initialize_seed(seed)
+        initialize_seed(seed,w)
+        self.reset()
 
     def get_num_levels(self):
         return lib.get_NUM_LEVELS()
@@ -253,16 +267,22 @@ class CoinRunVecEnv(VecEnv):
         """get current level seed-set in cpp"""
         num_levels = self.get_num_levels()
 
-        seed = [0] * num_levels
+        seed,w= [0] * num_levels,[0] * num_levels
         for i in range(num_levels):
             seed[i] = lib.get_LEVEL_SEEDS(i)
-        return seed
+            w[i] = lib.get_LEVEL_WEIGHTS(i)
+        return seed, w
 
     def get_cur_seed(self):
+        return self.buf_seed
+
+    # delete
+    def get_cur_seed_delete(self):
         """get seed sequence of a vector level"""
         seed = [0] * self.num_envs
-        for i in range(self.num_envs):
-            seed[i] = lib.get_SEED_SEQ(i)
+        #for i in range(self.num_envs):
+        #    seed[i] = lib.get_SEED_SEQ(i)
+
         return seed
 
     def get_phys(self):
@@ -284,6 +304,7 @@ class CoinRunVecEnv(VecEnv):
         self.handle = 0
 
     def reset(self):
+        lib.vec_game_over(self.handle)
         #print("CoinRun ignores resets")
         obs, _, _, _ = self.step_wait()
         return obs
@@ -294,6 +315,7 @@ class CoinRunVecEnv(VecEnv):
         else:
             return self.buf_rgb
 
+    # step = step_async(actions), return step_wait()
     def step_async(self, actions):
         assert actions.dtype in [np.int32, np.int64]
         actions = actions.astype(np.int32)
@@ -302,15 +324,21 @@ class CoinRunVecEnv(VecEnv):
     def step_wait(self):
         self.buf_rew = np.zeros_like(self.buf_rew)
         self.buf_done = np.zeros_like(self.buf_done)
+        # GARL
+        self.buf_seed = np.zeros_like(self.buf_seed)
 
         lib.vec_wait(
             self.handle,
             self.buf_rgb,
             self.buf_render_rgb,
             self.buf_rew,
-            self.buf_done)
+            self.buf_done,
+            self.buf_seed)
 
         obs_frames = self.buf_rgb
+        #print("bufrew",self.buf_rew)
+        #print("bufdone",self.buf_done)
+        print("bufseed",self.buf_seed)
 
         if Config.USE_BLACK_WHITE:
             obs_frames = np.mean(obs_frames, axis=-1).astype(np.uint8)[...,None]

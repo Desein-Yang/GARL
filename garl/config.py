@@ -57,7 +57,7 @@ class ConfigSingle(object):
         # The number of levels in the training set.
         # If NUM_LEVELS = 0, the training set is unbounded. All level seeds will be randomly generated.
         # Use SET_SEED = -1 and NUM_LEVELS = 500 to train with the same levels in the paper.
-        type_keys.append(('nlev', 'num_levels', int, 0, True))
+        type_keys.append(('nlev', 'num_levels', int, 500, True))
 
         # Provided as a seed for training set generation.
         # If SET_SEED = -1, this seed is not used and level seeds with be drawn from the range [0, NUM_LEVELS).
@@ -151,12 +151,13 @@ class ConfigSingle(object):
 
         # Evolution domain randomization keys
         # if use evolution domain randomization = 1
-        evo_keys.append(('es','eval_step',int , 1))
+        evo_keys.append(('es','eval_step',int , 16))
         evo_keys.append(('use-evo','use_evo',int , 1))
         evo_keys.append(('ini-levels','ini_levels',int , 200))
         evo_keys.append(('spa-levels','spa_levels',int , 10000))
         evo_keys.append(('thres-hold','thres-hold',float, 0.05))
         evo_keys.append(('train-iter','train_iter',int,8))
+        evo_keys.append(('load_seed','load_seed',int,0))
 
         evo_keys.append(('mu-rate','mu_rate',float, 0.5))
         evo_keys.append(('mu-op','mu_op', int,1))

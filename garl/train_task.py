@@ -2,6 +2,7 @@ import numpy as np
 from garl.main_utils import mpi_print
 from garl.eval import eval_set
 import wandb,joblib
+from garl import setup_utils
 
 class TaskOptimizer(object):
     def __init__(self,env,rep=3,eval_limit=1e6,log=True):
@@ -38,7 +39,7 @@ class TaskOptimizer(object):
 class SeedOptimizer(TaskOptimizer):
     def __init__(self,logdir,env,rand_seed=None,rep=3,
                  eval_limit=1e6,train_set_limit=500,
-                 spare_size=10000,ini_size=100,log=True):
+                 spare_size=10000,ini_size=100,log=True,load_seed=False):
         TaskOptimizer.__init__(self, env)
         #super(TaskOptimizer, self).__init__(env)
         self.rep = rep
@@ -48,10 +49,18 @@ class SeedOptimizer(TaskOptimizer):
         self.ini_size = ini_size
         self.rs = np.random.RandomState(rand_seed)
         seed_set = self.rs.randint(0,2**31-1,self.spare_size)
-        self.spare_set = set(seed_set[:self.spare_size-self.ini_size])
-        self.ini_set = set(seed_set[self.spare_size-self.ini_size:])
-        self.env.set_seed(self.ini_set)
 
+        self.spare_set = set(seed_set[:self.spare_size-self.ini_size])
+        self.isload = load_seed
+        if not load_seed:
+            self.ini_set = set(seed_set[self.spare_size-self.ini_size:])
+            self.hist.append(list(self.ini_set))
+        else:
+            self.load('opt_hist')
+            self.ini_set = self.hist[-1]
+
+        self.env.set_seed(self.ini_set)
+        print("train_task/seed_optimizer/set ini_set",self.ini_set)
         # all used seed set
         self.train_set_hist = set(seed_set)
         self.train_set_size = self.ini_size
@@ -66,9 +75,9 @@ class SeedOptimizer(TaskOptimizer):
         self.logdir = logdir
         self.log()
 
-    def load(self,filename):
-        self.hist = joblib.load(setup_utils.file_to_path(filename))
-        self.train_set_size = len(self.hist[-1])
+    @classmethod
+    def set_to_list(a):
+        return list(a).sort()
 
     def calDiv(self,p,vec):
         assert type(p) is float
@@ -82,18 +91,19 @@ class SeedOptimizer(TaskOptimizer):
             for i in range(vec1.shape[0]):
                 div1[i] = self.calDiv(vec1[i],vec1)
         else:
-            div1 = 0.0
+            div1 = np.zeros_like(vec1)
 
         fit1 = vec1 + self.phi * div1
         return fit1
 
     def gen(self,pop_size=1):
+        # without put back to avoid error in remove
         child = np.random.choice(
                     list(self.spare_set),
-                    pop_size
+                    pop_size,
+                    replace=False
                 )
-
-        return child
+        return list(child)
 
     def replace(self,sess):
         last_set = list(self.env.get_seed())
@@ -115,7 +125,6 @@ class SeedOptimizer(TaskOptimizer):
         self.train_set_hist.union(set(next_set))
         self.train_set_size = len(self.train_set_hist)
         self.step_elapsed += self.eval_steps
-        self.log()
 
         return next_set
 
@@ -146,7 +155,6 @@ class SeedOptimizer(TaskOptimizer):
         self.train_set_size = len(self.train_set_hist)
 
         self.step_elapsed += self.eval_steps
-        self.log()
         return next_set
 
     def add(self,sess,ratio=0.5):
@@ -154,14 +162,16 @@ class SeedOptimizer(TaskOptimizer):
         until add 50% * now set size"""
         last_set = list(self.env.get_seed())
         curr_set = self.gen(len(last_set))
+
         curr_set_rew = self.eval(sess,curr_set,self.rep)
+        print('/run/curr set mean_scores',curr_set_rew)
         curr_fit = self.calFit(curr_set_rew)
 
         next_set = last_set.copy()
 
         # Rank
         def should_add():
-            print(curr_fit[idx],self.train_rew)
+            #print(curr_fit[idx],self.train_rew)
             if curr_fit[idx] > self.train_rew:
                 return False
             if len(next_set) >= (1+ratio)*len(last_set):
@@ -176,15 +186,15 @@ class SeedOptimizer(TaskOptimizer):
                 next_set.append(curr_set[idx])
                 self.spare_set.remove(curr_set[idx])
 
+        w = self.calWeight(next_set,ratio)
         self.train_set_hist = set(next_set)
         self.train_set_size = len(self.train_set_hist)
         self.step_elapsed += self.eval_steps
-        self.log()
 
-        return next_set
+        return next_set,w
 
-    def load(self):
-        opt_hist = joblib.load(setup_utils.file_to_path('opt_hist'))
+    def load(self,filename):
+        opt_hist = joblib.load(setup_utils.file_to_path(filename))
         for key in opt_hist.keys():
             setattr(self,key,opt_hist[key])
 
@@ -202,21 +212,32 @@ class SeedOptimizer(TaskOptimizer):
         #idx = int(self.step_elapsed // 1e6)
         joblib.dump(opt_hist, self.logdir + "opt_hist")
 
-    def eval(self,sess,env_set,rep):
+    def eval(self,sess,eval_list,rep):
         nenv = self.env.num_envs
-        scores, steps = eval_set(sess,nenv,env_set,rep_count=rep)
+        eval_logs, eval_steps = eval_set(sess,nenv,eval_list,rep_count=rep)
+        self.eval_steps +=  eval_steps
 
-        self.eval_steps +=  np.sum(steps)
+        mean_scores = [0] * len(eval_list)
+        for i,seed in enumerate(eval_list):
+            mean_scores[i] = eval_logs[str(seed)]
 
-        return scores
+        return mean_scores
 
     def should_opt(self):
         if self.train_set_size >= self.train_set_limit:
             return False
         elif self.eval_steps >= self.eval_limit:
             return False
+        elif self.isload == True:
+            return False
 
         return True
+
+    def calWeight(self,seeds,ratio):
+        w = [0] * len(seeds)
+        for i,s in enumerate(seeds):
+            w[i] = 5*(1-ratio) if s in self.hist[-1] else 5
+        return w
 
     def run(self,sess,env,step_elapsed,train_rew,mode='add'):
         self.env = env
@@ -224,6 +245,9 @@ class SeedOptimizer(TaskOptimizer):
         self.eval_steps = 0
         self.step_elapsed = step_elapsed
         self.train_rew = train_rew
+        print('/run/train_rew',self.train_rew)
+        print('/run/eval_steps',self.eval_steps)
+        print('/run/self.should_opt',self.should_opt())
 
         # Optimizen until eval limit reach
         while(self.should_opt()):
@@ -234,17 +258,20 @@ class SeedOptimizer(TaskOptimizer):
                 next_set = self.select(sess,ratio=0.5)
                 self.env.set_seed(next_set)
             elif mode =='add':
-                next_set = self.add(sess,ratio=0.2)
-                self.env.set_seed(next_set)
+                next_set,w = self.add(sess,ratio=0.2)
+                print("weight is w",w)
+                self.env.set_seed(next_set,w)
                 break
             else:
                 raise ValueError
 
-        next_set = self.env.get_seed()
+        if not self.isload:
+            next_set = self.env.get_seed()
 
-        # Output nextset to be trained on
-        self.hist.append(next_set)
-        mpi_print("set new seed",next_set)
-        self.iter += 1
+            # Output nextset to be trained on
+            self.hist.append(next_set)
+            mpi_print("Next_set after optimizing",next_set)
+            self.iter += 1
+            self.log()
 
         return self.env, self.step_elapsed

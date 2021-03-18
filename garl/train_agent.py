@@ -1,12 +1,9 @@
 # =======================================================
 # Generative adversarial reinforcement learning main code
 #
-# Modification:
-# 1. add RandSeedWrapper() to control env seed
-# 2. add progressive difficulty env
-# 3. optimize parameters at T phase
-# copyright QiYANG
+# @author yangqi
 # =======================================================
+
 import time
 from mpi4py import MPI
 import tensorflow as tf
@@ -62,6 +59,7 @@ def main():
     size = comm.Get_size()
 
     seed = int(time.time()) % 10000
+    utils.mpi_print(seed * 100 + rank)
     set_global_seeds(seed * 100 + rank)
 
     # For wandb package to visualize results curves
@@ -70,7 +68,7 @@ def main():
     wandb.init(
         name = config["run_id"],
         project="coinrun",
-        notes=" generative adversarial train with ppo2_v4(use adptive policy optimizer)",
+        notes=" GARL generate seed",
         tags=["try"],
         config=config
     )
@@ -101,7 +99,9 @@ def main():
                                   spare_size = Config.SPA_LEVELS,
                                   ini_size = Config.INI_LEVELS,
                                   eval_limit = phase_eval_limit,
-                                  rand_seed = seed,rep=3, log=True)
+                                  train_set_limit = Config.NUM_LEVELS,
+                                  load_seed = Config.LOAD_SEED,
+                                  rand_seed = seed,rep=1, log=True)
 
         step_elapsed = 0
         t = 0
@@ -117,7 +117,7 @@ def main():
             Config.RESTORE_ID = Config.get_load_data('default')['args']['run_id']
             Config.RUN_ID = Config.get_load_data('default')['args']['run_id'].replace('-','_')
 
-        while(step_elapsed < Config.TOTAL_STEP*10**6):
+        while(step_elapsed < (Config.TOTAL_STEP-1)*10**6):
         # ============ GARL =================
             # optimize policy
             mean_rewards, datapoints = learn_func(sess=sess,policy=policy,env=env,
@@ -156,35 +156,25 @@ def main():
                     mpi_print("Replace count",len(tmp))
 
             # optimize env
+            step_elapsed = datapoints[-1][0]
             if t < Config.TRAIN_ITER:
-                step_elapsed = datapoints[-1][0]
                 best_rew_mean = max(mean_rewards)
                 env,step_elapsed = optimizer.run(sess,env,step_elapsed,best_rew_mean)
             t += 1
 
+        save_final_test = True
+        if save_final_test:
+            final_test = {}
+            final_test['step_elapsed'] = step_elapsed
+            train_set = env.get_seed()
+            final_test['train_set_size'] = len(train_set)
+            eval_log = eval_test(sess, nenv, train_set,train=True,is_high=False,rep_count=1000,log=True)
+            final_test['Train_set'] = eval_log
 
-        final_test = {}
-        mpi_print('Step_elapsed',step_elapsed)
-        train_set = optimizer.train_set_hist
-        scores, steps, eval_set= eval_test(sess, nenv, train_set,
-                                           train=True,is_high=False,
-                                           rep_count=1000,log=False)
-        mpi_print('Train_set',eval_set)
-        mpi_print('Train_mean',np.mean(scores))
-        mpi_print('Train_scores',scores)
-        final_test['Train_set'] = eval_set
-        finale_test['Train_scores'] = scores
+            eval_log = final_test(sess, nenv, None,train=False,is_high=True,rep_count=1000,log=True)
+            final_test['Test_set'] = eval_log
+            joblib.dump(final_test,setup_utils.file_to_path('final_test'))
 
-        scores, steps, eval_set = eval_test(sess, nenv, None,train=False,
-                                            is_high=True,rep_count=1000,
-                                            log=False)
-        mpi_print('Eval_set',eval_set)
-        mpi_print('Test_mean',np.mean(scores))
-        mpi_print('Datapoints',datapoints)
-        mpi_print('Test_scores',scores)
-        final_test['Eval_set'] = eval_set
-        final_test['Test_scores'] = scores
-        joblib.dump(final_test,setup_utils.file_to_path('final_test'))
     env.close()
 
 if __name__ == '__main__':
